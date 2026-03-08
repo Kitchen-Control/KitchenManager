@@ -1,0 +1,230 @@
+ // --- 1. USERS & LOCATIONS ---
+Table roles {
+  role_id int [pk, increment]
+  role_name varchar
+}
+
+
+Table users {
+  user_id int [pk, increment]
+  username varchar
+  password varchar
+  full_name varchar
+  role_id int
+  store_id int [note: "Unique"]
+}
+
+
+Table stores {
+  store_id int [pk, increment]
+  store_name varchar
+  address varchar
+  phone varchar
+}
+
+
+// --- 2. PRODUCTS & RECIPES ---
+Enum product_type_enum {
+  RAW_MATERIAL
+  SEMI_FINISHED
+  FINISHED_PRODUCT
+}
+
+
+Table products {
+  product_id int [pk, increment]
+  product_name varchar
+  product_type product_type_enum
+  unit varchar
+  shelf_life_days int [note: "sản phẩm có thời gian sủ dụng bao ngày (ex: 30 days)"]
+}
+
+
+Table recipes {
+  recipe_id int [pk, increment]
+  product_id int
+  recipe_name nvarchar
+   yield_quantity float [note: "How much this recipe makes"]
+  description text
+}
+
+
+Table recipe_details {
+  recipe_detail_id int [pk, increment]
+  recipe_id int
+  raw_material_id int
+  quantity float
+}
+
+
+// --- 3. ORDERS & PRODUCTION FLOW ---
+Table production_plans {
+  plan_id int [pk, increment]
+  plan_date date
+  start_date date
+  end_date date
+  status varchar
+  note text
+}
+
+
+Table production_plan_details {
+  plan_detail_id int [pk, increment]
+  plan_id int [not null]            
+  product_id int [not null]        
+  quantity float [not null]  
+  note text
+}
+
+
+Enum orders_status {
+  WAITTING
+  PROCESSING
+  DELIVERING
+  DONE
+  DAMAGED
+  CANCLED
+}
+
+
+Table orders {
+  order_id int [pk, increment]
+  delivery_id int
+  store_id int
+  order_date datetime
+  status orders_status
+  img varchar
+  comment varchar
+}
+
+
+Table order_details {
+  order_detail_id int [pk, increment]
+  order_id int
+  product_id int
+  quantity float
+}
+
+
+Enum log_batches_enum {
+  PROCESSING
+  DONE
+  EXPIRED
+  DAMAGED
+}
+
+
+
+
+Enum log_batches_type {
+  PRODUCTION
+  PURCHASE
+}
+
+
+Table log_batches {
+  batch_id int [pk, increment]
+  plan_id int
+  product_id int
+  quantity float
+  production_date date [note: "có thể là ngày sản xuất hoặc ngày nhập hàng"]
+  expiry_date date
+  status log_batches_enum
+  type log_batches_type
+  created_at datetime
+}
+
+
+// --- 4. CENTRAL WAREHOUSE ---
+Table inventories {
+  inventory_id int [pk, increment]
+  product_id int
+  batch_id int [note: "Unique"]
+  quantity float
+  expiry_date date
+}
+
+
+Enum inventories_type {
+  IMPORT
+  EXPORT
+}
+
+
+Table inventory_transactions {
+  transaction_id int [pk, increment]
+  product_id int
+  batch_id int
+  type inventories_type
+  quantity float
+  created_at datetime
+  note text
+}
+
+
+Enum delivery_status {
+  WAITTING
+  PROCESSING
+  DONE
+}
+
+
+Table deliveries {
+  delivery_id int [pk, increment]
+  delivery_date date
+  shipper_id int
+  created_at datetime
+}
+
+
+Table quality_feedbacks {
+  feedback_id int [pk, increment]
+  order_id int [note: "Unique"]
+  store_id int
+  rating int
+  comment text
+  created_at datetime
+}
+
+
+Table reports {
+  report_id int [pk, increment]
+  report_type varchar
+  user_id int
+  created_date datetime
+}
+
+
+// --- RELATIONSHIPS ---
+// Auth
+Ref: users.role_id > roles.role_id
+Ref: users.store_id > stores.store_id
+
+
+// Product
+Ref: recipes.product_id > products.product_id
+Ref: recipe_details.recipe_id > recipes.recipe_id
+Ref: recipe_details.raw_material_id > products.product_id
+// Flow
+Ref: orders.store_id > stores.store_id
+Ref: order_details.order_id > orders.order_id
+Ref: order_details.product_id > products.product_id
+Ref: log_batches.plan_id > production_plans.plan_id
+Ref: log_batches.product_id < products.product_id
+// Logistics
+Ref: inventories.product_id > products.product_id
+Ref: inventories.batch_id > log_batches.batch_id
+Ref: inventory_transactions.product_id > products.product_id
+// MỚI THÊM: Quan hệ Transaction - Batch
+Ref: inventory_transactions.batch_id > log_batches.batch_id
+Ref: deliveries.delivery_id < orders.delivery_id
+Ref: quality_feedbacks.order_id > orders.order_id
+Ref: quality_feedbacks.store_id > stores.store_id
+Ref: reports.user_id > users.user_id
+
+
+
+
+Ref: users.user_id < deliveries.shipper_id
+Ref: products.product_id < production_plan_details.product_id
+Ref: production_plans.plan_id < production_plan_details.plan_id

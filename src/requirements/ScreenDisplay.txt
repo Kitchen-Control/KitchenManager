@@ -1,0 +1,282 @@
+0. MÀN HÌNH CHUNG (COMMON)
+Màn hình 0.1: Đăng nhập (Login)
+Mục đích: Xác thực người dùng và điều hướng vào phân hệ tương ứng.
+UI Elements:
+Logo dự án.
+Input: Username, Password.
+Button: "Đăng nhập".
+Logic & Entities:
+Sử dụng bảng users, roles.
+Logic điều hướng:
+Role STORE_STAFF → Chuyển sang Phân hệ Cửa hàng.
+Role SUPPLY_COORDINATOR → Chuyển sang Phân hệ Điều phối.
+Role KITCHEN_MANAGER → Chuyển sang Phân hệ Bếp.
+Role SHIPPER → Chuyển sang Phân hệ Giao vận.
+Role MANAGER/ADMIN → Chuyển sang Phân hệ Quản trị (Web Admin).
+Validation: Kiểm tra user is_active (nếu có).
+Màn hình 0.2: Trung tâm Thông báo (Notification Center)
+Mục đích: Thông báo các sự kiện quan trọng để User không phải F5 liên tục.
+UI Elements:
+List thông báo (Icon, Tiêu đề, Thời gian, Trạng thái Đã đọc/Chưa đọc).
+Store Staff: "Đơn hàng #123 đang được giao".
+Kitchen: "Có chuyến xe mới cần xuất kho", "Cảnh báo nguyên liệu X sắp hết hạn".
+Shipper: "Bạn vừa được gán chuyến xe mới".
+Entities: Không nhất thiết cần bảng riêng (có thể dùng Firebase/Socket), hoặc tạo bảng notifications.
+Logic: Click vào thông báo → Điều hướng đến màn hình chi tiết tương ứng.
+
+1. PHÂN HỆ CỬA HÀNG (STORE APP)
+Target User: Store Staff
+Màn hình 1.1: Danh sách Sản phẩm (Marketplace)
+Mục đích: Xem hàng và thêm vào giỏ (Flow 1 - B1).
+UI Elements:
+Grid/List các sản phẩm (Hình ảnh, Tên, Đơn vị).
+Label quan trọng: "Tồn kho khả dụng: X" (Màu xanh).
+Input: Số lượng (+/- stepper).
+Button: "Thêm vào giỏ".
+Icon Giỏ hàng (kèm badge số lượng).
+Entities: products (Read), inventories (Read), orders (Read - để tính stock).
+Logic/Rules:
+BR-005: Tính Available_Stock = Total Inventory - Reserved Stock (WAITING/PROCESSING).
+BR-006: Nếu Input Quantity > Available_Stock → Disable nút thêm hoặc báo lỗi.
+Màn hình 1.2: Giỏ hàng & Xác nhận (Checkout)
+Mục đích: Review đơn và gửi đi.
+UI Elements:
+List các món đã chọn (Tên, Số lượng, Nút xóa).
+Input: Ghi chú đơn hàng (comment).
+Button: "Gửi đơn hàng".
+Entities: Create orders, Create order_details.
+Logic/Rules:
+BR-007: Hệ thống tự động lấy store_id của user đang login, ẩn field này không cho user chọn.
+BR-009: Số lượng phải > 0.
+Màn hình 1.3: Lịch sử Đơn hàng (Order History)
+Mục đích: Theo dõi trạng thái (Flow 1).
+UI Elements:
+List đơn hàng sắp xếp theo order_date giảm dần.
+Badges trạng thái màu sắc: WAITTING (Vàng), PROCESSING (Xanh dương), DELIVERING (Tím), DONE (Xanh lá), CANCLED (Xám).
+Entities: orders (Read/Update).
+Logic/Rules:
+BR-029: Chỉ hiện đơn của store_id hiện tại.
+Màn hình 1.4: Chi tiết Đơn hàng & Đánh giá (Order Details)
+Mục đích: Xem chi tiết và hành động Hủy hoặc Đánh giá.
+UI Elements:
+Thông tin items.
+Button: "Hủy đơn" (Chỉ hiện khi WAITING).
+Section Đánh giá: 5 ngôi sao, Textbox nhận xét, Button "Gửi đánh giá" (Chỉ hiện khi DONE).
+Entities: orders, order_details, Create quality_feedbacks.
+Logic/Rules:
+BR-008: Disable nút Hủy nếu status != WAITING.
+BR-027: Form đánh giá bị Disable nếu DONE > 24h.
+BR-028: Kiểm tra nếu đã có record trong quality_feedbacks thì ẩn form (chỉ hiện kết quả đã đánh giá). 
+
+2. PHÂN HỆ ĐIỀU PHỐI (COORDINATOR APP)
+Target User: Supply Coordinator
+
+Màn hình 2.1: Bảng điều khiển Gom đơn (Order Grouping Dashboard)
+Mục đích: Gom các đơn chờ thành chuyến xe (Flow 1 - B2).
+UI Elements:
+Filter: Khu vực (Quận/Huyện), Ngày tạo.
+List các đơn hàng có status WAITTING (gồm Tên Store, Địa chỉ, Tổng số lượng).
+Checkbox: Chọn nhiều đơn.
+Button: "Tạo chuyến giao hàng (deliveries)" (Floating Action Button).
+Entities: orders (Read).
+Logic/Rules:
+BR-011: Chỉ hiển thị đơn WAITTING.
+BR-029: Được xem tất cả đơn WAITTING toàn hệ thống.
+Màn hình 2.2: Tạo Chuyến xe (Create Delivery Modal)
+Mục đích: Gán Shipper và ngày giao.
+UI Elements:
+List các Order đã tích chọn ở màn 2.1.
+Dropdown: Chọn Shipper (Load từ users where role=SHIPPER).
+Date Picker: Chọn delivery_date.
+Button: "Xác nhận tạo".
+Entities: Create deliveries, Update orders (delivery_id, status -> PROCESSING).
+Logic/Rules:
+BR-012: Khi chọn Shipper, hệ thống check ngầm. Nếu Shipper đó đang có chuyến PROCESSING → Báo lỗi "Shipper đang bận".
+BR-013: Date >= Today.
+Màn hình 2.3: Quản lý Chuyến xe (Delivery Monitor)
+Mục đích: Theo dõi tình trạng các chuyến.
+UI Elements:
+List Deliveries (Mã chuyến, Tên Shipper, Trạng thái: WAITING/PROCESSING/DONE).
+Click vào xem chi tiết các Order bên trong.
+Entities: deliveries, orders.
+
+3. PHÂN HỆ BẾP (KITCHEN APP)
+Target User: Kitchen Manager
+Màn hình 3.1: Soạn hàng & Xuất kho (Outbound Fulfillment)
+Mục đích: Bếp soạn hàng đưa cho Shipper (Flow 1 - B3).
+UI Elements:
+List các deliveries đang WAITING (Sắp xếp theo giờ giao).
+Khi bấm vào 1 chuyến: Hiện danh sách tổng hợp (Ví dụ: 50 Pizza, 20 Mì Ý - Tổng của cả chuyến).
+Button: "Xác nhận Xuất kho" (Confirm & Dispatch).
+Entities: deliveries, orders, Create inventory_transactions.
+Logic/Rules:
+BR-020 (FEFO): Khi bấm Confirm, Backend tự động chạy thuật toán trừ kho từ lô cũ nhất. User không cần chọn tay.
+BR-024: Nếu kho không đủ $\rightarrow$ Báo lỗi.
+Màn hình 3.2: Thực thi Sản xuất (Production Execution)
+Mục đích: Bếp thực hiện nấu và nhập kho thành phẩm (Flow 2 - B2, B3).
+UI Elements:
+List production_plans hôm nay.
+Chi tiết: Món A (Mục tiêu 100, Đã làm 0).
+Button: "Hoàn thành Lô" (Create Batch).
+Popup Input: Số lượng thực tế, Ngày hết hạn (Expiry Date).
+Entities: production_plans, production_plan_details, Create log_batches.
+Logic/Rules:
+BR-016: batch phải link với plan_id.
+BR-017: Bắt buộc nhập expiry_date.
+BR-019: Default status lô là PROCESSING, user bấm xong chuyển DONE.
+Màn hình 3.3: Nhập mua Nguyên liệu (Inbound/Procurement)
+Mục đích: Nhập hàng từ nhà cung cấp (Flow 3).
+UI Elements:
+Form nhập liệu.( tiêu đề )
+Dropdown: Chọn Nguyên liệu (RAW_MATERIAL).
+Input: batch_id, quantity
+Date Picker: Hạn sử dụng trên bao bì.
+Button: "Nhập kho".
+Entities: Create log_batches (Type PURCHASE), Create inventory_transactions.
+Logic/Rules:
+BR-021: Tự động tạo Transaction IMPORT khi bấm lưu.
+BR-022: Cảnh báo nếu expiry_Date nhập vào quá gần ngày hiện tại.
+Màn hình 3.4: Quản lý Kho & Hủy hàng (Inventory & Waste)
+Mục đích: Xem tồn kho và xử lý hàng hỏng (Flow 4).
+UI Elements:
+Tab 1: Tồn kho khả dụng (Hiện List inventories).
+Tab 2: Hàng hết hạn/Hỏng (Filter các lô status=EXPIRED hoặc DAMAGED).
+Button: "Tiêu hủy" (Dispose).
+Entities: inventories, log_batches, Create inventory_transactions (Type EXPORT).
+Logic/Rules:
+BR-025: Hàng EXPIRED bị khóa, không bán được, chỉ được hủy.
+BR-026: Khi bấm Tiêu hủy, tạo Transaction EXPORT (ghi chú lý do) để trừ sạch tồn kho.
+Màn hình 3.5: Thẻ Kho / Lịch sử Giao dịch (Stock Card / Transaction History)
+Mục đích: Trả lời câu hỏi "Tại sao món này còn 5kg? Hôm qua nhập bao nhiêu, xuất bao nhiêu?".
+UI Elements:
+Header: Tên sản phẩm, Tổng tồn hiện tại.
+Filter: Khoảng thời gian (Từ ngày - Đến ngày).
+Table:
+Ngày giờ.
+Loại: IMPORT (Xanh) / EXPORT (Đỏ).
+Số lượng biến động (+10 / -5).
+Ghi chú (ví dụ: "Xuất cho chuyến xe DL-001", "Hủy hàng hỏng").
+Entities: inventory_transactions, products.
+Logic/Rules: Chỉ hiển thị giao dịch của các Product thuộc kho bếp.
+Màn hình 3.6: Xem chi tiết Công thức (Recipe Viewer - Read Only)
+Mục đích: Khi đang nấu (Production Execution), đầu bếp cần xem công thức để biết định lượng mà cân đo.
+UI Elements:
+Tên món ăn, Hình ảnh minh họa.
+List nguyên liệu cần thiết (Định lượng cho 1 đơn vị sản phẩm).
+Hướng dẫn chế biến (description trong bảng recipes).
+Entities: recipes, recipe_details.
+Logic/Rules: Kitchen Manager chỉ được xem, không được sửa (Quyền sửa thuộc Admin).
+
+4. PHÂN HỆ GIAO VẬN (SHIPPER APP)
+Target User: Shipper
+Màn hình 4.1: Chuyến đi của tôi (My Current Route)
+Mục đích: Nhận chuyến và đi giao (Flow 1 - B4).
+UI Elements:
+Card Chuyến xe hiện tại (Chỉ hiện nếu được gán).
+Trạng thái: WAITING (Chưa lấy hàng) hoặc READY (Bếp đã soạn xong).
+Button: "Bắt đầu giao hàng" (Start Trip).
+Entities: deliveries.
+Logic/Rules:
+Khi bấm Start $\rightarrow$ Update deliveries.status = PROCESSING.
+BR-014: Chỉ thấy chuyến của mình.
+Màn hình 4.2: Chi tiết Điểm giao (Drop-off Details)
+Mục đích: Giao hàng cho Store và xác nhận (Flow 1 - B5).
+UI Elements:
+List danh sách các Store cần giao trong chuyến (theo thứ tự).
+Bấm vào 1 Store: Hiện chi tiết đơn hàng (Món gì, số lượng).
+Button Action: "Giao thành công" (Success) hoặc "Báo cáo sự cố" (Report Issue).
+Entities: orders.
+Logic/Rules:
+Bấm Thành công $\rightarrow$ Update orders.status = DONE.
+BR-014 (Auto-complete): Nếu đây là đơn cuối cùng $\rightarrow$ Hệ thống tự update Chuyến xe thành DONE.
+
+5. PHÂN HỆ QUẢN TRỊ (WEB ADMIN)
+Target User: Manager / Admin
+Màn hình 5.1: Quản lý Sản phẩm & Công thức (Master Data)
+Mục đích: Định nghĩa món ăn.
+UI Elements:
+CRUD Products.
+Section "Công thức": Thêm nguyên liệu và định lượng.
+Entities: products, recipes, recipe_details.
+Logic/Rules:
+BR-001: Bắt buộc nhập công thức cho Finished Product.
+BR-002: Filter chỉ cho chọn Raw/Semi Material làm nguyên liệu.
+Màn hình 5.2: Lập Kế hoạch Sản xuất (Planning)
+Mục đích: Chỉ đạo bếp làm gì (Flow 2 - B1).
+UI Elements:
+Calendar View.
+Form tạo Plan: Chọn ngày.
+Table add items: Chọn món, nhập Planned Quantity.
+Entities: production_plans, production_plan_details.
+Logic/Rules:
+BR-015: Không cho lưu nếu không có detail nào.
+Màn hình 5.3: Quản lý Người dùng (User Mgmt)
+Mục đích: Tạo tài khoản nhân viên.
+UI Elements:
+Form User: Username, Password, Role.
+Dropdown "Cửa hàng trực thuộc" (Chỉ hiện nếu chọn Role = Store Staff).
+Entities: users, stores.
+Logic/Rules:
+BR-003: Bắt buộc chọn Store nếu là Staff.
+Màn hình 5.4: Báo cáo Tổng hợp (Reports)
+Mục đích: Xem hiệu quả kinh doanh.
+UI Elements:
+Chart: Doanh thu theo ngày/tháng.
+Table: Báo cáo Hao hụt (Waste Report) từ bảng reports.
+Table: Tồn kho hiện tại (Current Stock).
+Entities: reports, inventories, orders.
+Logic/Rules:
+BR-029: Manager được xem full quyền.
+
+TỔNG HỢP LẠI: CHECKLIST ĐỂ BẠN LÀM ĐỒ ÁN
+Nếu bạn muốn đồ án đạt điểm tối đa, hãy đảm bảo cấu trúc Menu của App như sau:
+1. Store App:
+Home (Marketplace)
+Cart
+Orders (History)
+Notification
+Profile
+2. Coordinator App:
+Dashboard (Grouping)
+Deliveries (Monitor)
+Shippers (List & Status)
+Profile
+3. Kitchen App:
+Production (Plan & Execute)
+Inventory (Stock List & Stock Card)
+Inbound (Nhập mua)
+Outbound (Soạn hàng)
+Waste (Hủy hàng)
+4. Shipper App:
+Current Trip
+Trip History
+Profile (Toggle On/Off Duty)
+5. Admin Web:
+Dashboard
+Product & Recipe Mgmt
+Planning
+User & Store Mgmt
+Reports
+
+BẢNG ÁNH XẠ API ENDPOINTS (OpenAPI Spec)
+Màn hình | API Endpoint | Method | Ghi chú
+---------|--------------|--------|--------
+Login | /auth/login | POST | Trả 400/401 khi sai mật khẩu
+Marketplace | /products, /inventories | GET | Tính Available Stock
+Cart/Checkout | /orders | POST | storeId, comment, orderDetails
+Order History | /orders/get-by-store/{storeId} | GET | Chỉ đơn của store
+Order Cancel | /orders/update-status | PATCH | orderId, status=CANCLED
+Order Aggregation | /orders, /users, /stores | GET | Đơn WAITTING, danh sách Shipper
+Create Delivery | /deliveries | POST | shipperId, deliveryDate, orderIds (nếu backend hỗ trợ)
+Deliveries | /deliveries | GET | Tất cả chuyến xe
+Shipper Trips | /deliveries/get-by-shipper/{shipperId} | GET | Chuyến của shipper
+Inventory | /inventories | GET | Tồn kho
+Inventory by ID | /inventories/get-by-id/{id} | GET | Chi tiết 1 inventory
+Transactions | /inventory-transactions | GET, POST | Lịch sử nhập xuất
+Feedback | /feedbacks | GET, POST | orderId, rating, comment
+Products (Admin) | /products | GET, POST, PUT | CRUD sản phẩm
+Users (Admin) | /users | GET, POST, PUT, DELETE | CRUD người dùng
+Stores (Admin) | /stores | GET, POST, PUT, DELETE | CRUD cửa hàng
+Recipes | /recipes, /recipes/search/{keyword} | GET | Công thức
+Assign Shipper | /deliveries/{id}/assign-shipper/{shipperId} | PATCH | Gán shipper cho chuyến
+

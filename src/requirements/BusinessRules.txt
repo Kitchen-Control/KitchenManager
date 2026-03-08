@@ -1,0 +1,153 @@
+I. PHÂN HỆ QUẢN LÝ DỮ LIỆU NGUỒN (MASTER DATA)
+BR-001: Tính toàn vẹn của Công thức (Recipe Integrity)
+Mô tả: Một sản phẩm loại FINISHED_PRODUCT bắt buộc phải có ít nhất 1 bản ghi trong bảng recipes và các chi tiết tương ứng trong recipe_details trước khi được phép đưa vào Kế hoạch sản xuất.
+Validation: Hệ thống chặn hành động "Duyệt kế hoạch" nếu sản phẩm trong kế hoạch chưa có công thức.
+BR-002: Phân cấp Nguyên liệu (Ingredient Hierarchy)
+Mô tả: Trong recipe_details, thành phần nguyên liệu (raw_material_id) chỉ được phép chọn sản phẩm có loại là RAW_MATERIAL hoặc SEMI_FINISHED.
+Validation: Không được phép chọn FINISHED_PRODUCT làm nguyên liệu cho một thành phẩm khác (tránh vòng lặp tham chiếu).
+BR-003: Ràng buộc người dùng Cửa hàng (Store User Binding)
+Mô tả: Tài khoản User có role_id là Staff bắt buộc phải gắn với một store_id cụ thể.
+Logic: Trường store_id trong bảng users không được để NULL đối với role Staff.
+BR-004: Đơn vị tính nhất quán (Unit Consistency)
+Mô tả: Mọi giao dịch (Đặt hàng, Sản xuất, Nhập kho) đều phải sử dụng đơn vị tính (unit) gốc được định nghĩa trong bảng products. Hệ thống không hỗ trợ quy đổi đơn vị tự động trong giai đoạn này.
+
+II. PHÂN HỆ ĐẶT HÀNG (ORDERING - FLOW 1)
+BR-005: Công thức Tồn kho Khả dụng (Available Stock Formula)
+Mô tả: Số lượng hàng hiển thị cho Store đặt phải được tính toán Real-time (Thời gian thực).
+Công thức: Available_Stock = Tổng Inventory (của sản phẩm) - Tổng số lượng đang nằm trong các đơn hàng có status là WAITING hoặc PROCESSING.
+Lý do: Status DONE là đã giao xong (đã trừ kho), DELIVERING là đã xuất kho (đã trừ kho). Chỉ có WAITING và PROCESSING là hàng "đang giữ chỗ" nhưng chưa trừ kho vật lý.
+BR-006: Chặn đơn hàng vượt quá tồn kho (Over-order Block)
+Validation: Khi Store nhấn "Gửi đơn", hệ thống kiểm tra lại Available_Stock lần cuối. Nếu Quantity > Available_Stock $\rightarrow$ Báo lỗi và từ chối tạo đơn.
+BR-007: Tính sở hữu đơn hàng (Order Ownership)
+Mô tả: Trường store_id trong bảng orders phải được lấy tự động từ store_id của User đang đăng nhập. User không được phép chọn/thay đổi Store đặt hàng.
+BR-008: Quy tắc Hủy đơn (Cancellation Policy)
+Mô tả: Store chỉ được phép chuyển trạng thái đơn hàng sang CANCLED khi đơn hàng đang ở trạng thái WAITING.
+Logic: Nếu đơn hàng đã sang PROCESSING (đã được điều phối), nút Hủy bị vô hiệu hóa.
+BR-009: Ngưỡng đặt hàng tối thiểu
+Validation: Số lượng đặt hàng trong order_details phải là số dương (> 0).
+BR-010: Trạng thái dòng chảy đơn hàng (Order Workflow)
+Mô tả: Trạng thái đơn hàng phải tuân thủ luồng: WAITING $\rightarrow$ PROCESSING (khi gán Delivery) $\rightarrow$ DELIVERING (khi Shipper nhận) $\rightarrow$ DONE hoặc DAMAGED. Không được phép nhảy cóc trạng thái.
+
+III. PHÂN HỆ ĐIỀU PHỐI & GIAO VẬN (LOGISTICS - FLOW 1)
+BR-011: Quy tắc Gom đơn (Grouping Logic)
+Mô tả: Supply Coordinator chỉ được phép chọn các đơn hàng có trạng thái WAITING để tạo Chuyến xe (delivery).
+Validation: Không thể thêm đơn hàng đã thuộc về một delivery_id khác vào chuyến mới.
+BR-012: Logic gán Shipper (Shipper Availability)
+Mô tả: Một Shipper không thể nhận chuyến xe mới nếu họ đang có một chuyến xe khác ở trạng thái PROCESSING (Đang đi giao).
+Validation: Hệ thống check bảng deliveries với điều kiện shipper_id và status = PROCESSING.
+BR-013: Ngày giao hàng hợp lệ
+Validation: delivery_date phải lớn hơn hoặc bằng ngày hiện tại (>= Today). Không được tạo chuyến giao hàng trong quá khứ.
+BR-014: Quyền xem lộ trình
+Mô tả: Shipper chỉ được phép xem danh sách đơn hàng và địa chỉ Store thuộc về delivery_id mà mình được phân công.
+
+IV. PHÂN HỆ SẢN XUẤT (PRODUCTION - FLOW 2)
+BR-015: Liên kết Kế hoạch và Chi tiết
+Mô tả: Bảng production_plan_details dùng để lưu mục tiêu sản xuất. Một production plan  phải có ít nhất 1 Plan Detail.
+Validation: Không cho phép lưu production_plans nếu danh sách chi tiết rỗng.
+BR-016: Định danh Lô sản xuất (Batch Linkage)
+Mô tả: Mọi lô hàng (log_batches) có type = PRODUCTION bắt buộc phải tham chiếu (foreign key) tới một plan_id hợp lệ.
+BR-017: Quy trình đóng Lô (Batch Closing)
+Mô tả: Khi Central Kitchen chuyển trạng thái log_batches sang DONE, hệ thống bắt buộc tự động nhập expiry_date (Ngày hết hạn).
+BR-018: Giới hạn sản xuất vượt mức (Over-production Warning - Optional)
+Mô tả: Nếu tổng số lượng sản xuất thực tế (từ log_batches) vượt quá 120% so với planned_quantity trong production_plan_details, hệ thống hiển thị cảnh báo cho Manager kiểm tra lại nguyên liệu.
+BR-019: Trạng thái mặc định Lô sản xuất
+Mô tả: Khi vừa tạo, log_batches (Production) có trạng thái mặc định là PROCESSING. Chỉ khi sản xuất xong mới chuyển sang DONE.
+
+V. PHÂN HỆ KHO & NHẬP MUA (INVENTORY & PROCUREMENT - FLOW 3)
+BR-020: Nguyên tắc xuất kho FEFO (First Expired First Out)
+Mô tả: Trong Flow 1 (B3), khi hệ thống tự động trừ kho, thuật toán phải ưu tiên chọn các batch_id có expiry_date gần nhất (nhưng chưa hết hạn).
+Logic: Sort inventories theo expiry_date ASC $\rightarrow$ Trừ dần quantity.
+BR-021: Tự động nhập kho khi mua hàng (Auto Inbound)
+Mô tả: Trong Flow 3, khi tạo log_batches với type = PURCHASE và status = DONE, hệ thống phải tự động sinh ra một bản ghi inventory_transactions (type = IMPORT) để tăng tồn kho ngay lập tức.
+BR-022: Kiểm tra hạn sử dụng đầu vào (Inbound Expiry Check)
+Validation: Khi nhập hàng mua (PURCHASE), nếu expiry_date nhập vào nhỏ hơn Ngày hiện tại + 3 ngày (ví dụ), hệ thống hiện cảnh báo: "Hàng sắp hết hạn, xác nhận nhập?".
+BR-023: Tính bất biến của Transaction
+Mô tả: Dữ liệu trong bảng inventory_transactions là bất biến (Immutable). Không được phép Update hoặc Delete. Nếu sai, phải tạo Transaction bù trừ.
+BR-024: Không cho phép tồn kho âm
+Validation: Mọi giao dịch EXPORT (Xuất bán, Xuất hủy) đều phải kiểm tra: Current_Quantity - Export_Quantity >= 0. Nếu < 0, transaction bị rollback.
+
+VI. PHÂN HỆ QUẢN LÝ RỦI RO & CHẤT LƯỢNG (WASTE & FEEDBACK - FLOW 4)
+BR-025: Khóa hàng hết hạn (Expired Stock Lockdown)
+Mô tả: Các lô hàng (batch_id) có trạng thái EXPIRED (do Cronjob quét) được coi là "Hàng bị khóa".
+Logic: Available_Stock (BR-005) không được tính các lô này. Không thể xuất bán các lô này cho Store.
+BR-026: Quy trình Hủy hàng (Waste Disposal)
+Mô tả: Để giảm tồn kho của hàng hỏng/hết hạn về 0, Manager phải thực hiện giao dịch inventory_transactions với type = EXPORT và ghi chú rõ lý do hủy. Hệ thống tự động trừ quantity về 0 của  inventory có batch_id tương ứng.
+BR-027: Thời gian cho phép đánh giá (Feedback Window)
+Mô tả: Store chỉ được tạo quality_feedbacks trong vòng 24 giờ kể từ khi đơn hàng có trạng thái DONE.
+Validation: Disable form đánh giá nếu Now > Order.Done_Time + 24h.
+BR-028: Đánh giá duy nhất (Unique Feedback)
+Validation: Mỗi order_id chỉ tồn tại duy nhất 1 bản ghi trong bảng quality_feedbacks.
+
+VII. PHÂN HỆ HỆ THỐNG & BÁO CÁO (SYSTEM & REPORTING)
+BR-029: Phân quyền truy cập dữ liệu Báo cáo (Data Privacy & Reporting Scope)
+Mô tả: Hệ thống giới hạn phạm vi dữ liệu mà mỗi vai trò được phép xem trên các Dashboard và Báo cáo (Reports) để đảm bảo bảo mật kinh doanh.
+Chi tiết phân quyền:
+Store Staff (Nhân viên Cửa hàng)
+Phạm vi: Chỉ dữ liệu thuộc store_id gắn với tài khoản của họ.
+Được xem:
+Lịch sử đơn hàng (orders) của chính cửa hàng mình.
+Trạng thái xử lý và vị trí đơn hàng của mình.
+Con số "Tồn kho khả dụng" (Available Stock) của Bếp (nhưng không xem được chi tiết Lô).
+Bị chặn:
+Dữ liệu đơn hàng của cửa hàng khác.
+Số lượng tồn kho thực tế, chi tiết lô, hạn sử dụng của nguyên liệu trong kho Bếp.
+Giá vốn hàng bán (Cost of Goods Sold).
+Supply Coordinator (Điều phối viên)
+Phạm vi: Dữ liệu liên quan đến Vận hành Giao nhận (Logistics).
+Được xem:
+Danh sách tất cả đơn hàng (orders) có trạng thái WAITING/PROCESSING trên toàn hệ thống (để thực hiện gom đơn).
+Danh sách và trạng thái của tất cả các Chuyến xe (deliveries).
+Lịch làm việc và trạng thái bận/rảnh của Shipper.
+Bị chặn:
+Chi tiết công thức nấu ăn (recipes).
+Kế hoạch sản xuất nội bộ của bếp.
+Báo cáo tài chính (Doanh thu/Lợi nhuận).
+Kitchen Manager (Quản lý Bếp)
+Phạm vi: Dữ liệu liên quan đến Sản xuất (Production) và Kho (Inventory).
+Được xem:
+Báo cáo tồn kho chi tiết (Số lượng theo Lô, Hạn sử dụng, Vị trí).
+Báo cáo nhập xuất tồn (inventory_transactions).
+Kế hoạch sản xuất (production_plans) và tiến độ thực hiện.
+Báo cáo Hao hụt/Hủy hàng (reports type WASTE).
+Bị chặn:
+Báo cáo doanh thu bán hàng chi tiết của từng Cửa hàng Franchise (Dữ liệu này thuộc về bộ phận Kinh doanh/Admin).
+Shipper (Nhân viên Giao hàng)
+Phạm vi: Chỉ dữ liệu thuộc chuyến xe (delivery_id) được phân công.
+Được xem:
+Danh sách đơn hàng cần giao trong chuyến hiện tại.
+Thông tin địa chỉ, số điện thoại của các Store trong chuyến.
+Bị chặn:
+Toàn bộ báo cáo thống kê, doanh thu, tồn kho.
+Thông tin của các chuyến xe không phải của mình.
+Manager / Admin (Quản trị viên)
+Phạm vi: Toàn quyền (Full Access).
+Được xem:
+Tất cả các báo cáo nêu trên.
+Báo cáo tổng hợp tài chính: Doanh thu, Lợi nhuận, Giá vốn.
+Hiệu suất làm việc của tất cả nhân viên (KPIs).
+
+VIII. QUY TẮC BẢO MẬT & HỆ THỐNG (SECURITY & SYSTEM)
+BR-030: Kiểm tra trạng thái hoạt động (Active User Check)
+Mô tả: Khi đăng nhập, hệ thống phải kiểm tra cờ `is_active` của User.
+Validation: Nếu `is_active = false` (đã nghỉ việc hoặc bị khóa), từ chối đăng nhập và thông báo "Tài khoản đã bị khóa".
+
+BR-031: Tính duy nhất của Tên đăng nhập (Unique Username)
+Mô tả: Trong hệ thống, `username` phải là duy nhất, không phân biệt hoa thường.
+Validation: Khi tạo hoặc sửa User, nếu username trùng với user khác -> Báo lỗi.
+
+BR-032: Tính duy nhất của Tên Cửa hàng (Unique Store Name)
+Mô tả: Tên cửa hàng (`store_name`) không được trùng nhau để tránh nhầm lẫn trong vận hành giao vận.
+
+BR-033: Ràng buộc mật khẩu (Password Policy)
+Mô tả: Mật khẩu người dùng phải có độ dài tối thiểu 6 ký tự.
+Validation: API trả về lỗi 400 nếu password quá ngắn.
+
+BR-034: Tính toàn vẹn của Chuyển đổi Trạng thái (Status Transition Integrity)
+Mô tả: Không được phép thay đổi trạng thái đơn hàng/chuyến xe một cách tùy tiện.
+Validation:
+- Order: WAITING -> PROCESSING -> DELIVERING -> DONE/DAMAGED. Không được từ WAITING nhảy thẳng sang DONE.
+- Delivery: WAITING -> PROCESSING -> DONE.
+
+BR-035: Phạm vi dữ liệu theo Role (Role-based Data Scope)
+Mô tả: API phải lọc dữ liệu trả về dựa trên Role của người gọi (Server-side filtering), không chỉ ẩn trên giao diện.
+Validation: Store Staff gọi API /orders chỉ nhận được đơn của store mình, không nhận được đơn của store khác.

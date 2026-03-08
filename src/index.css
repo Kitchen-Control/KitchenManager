@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Warm Kitchen Theme - Industrial Professional */
+    --background: 30 20% 98%;
+    --foreground: 20 20% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 20 20% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 20% 10%;
+
+    /* Primary: Warm Orange - Kitchen/Food inspired */
+    --primary: 24 85% 52%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: Warm Gray */
+    --secondary: 30 10% 94%;
+    --secondary-foreground: 20 15% 25%;
+
+    /* Muted: Light warm gray */
+    --muted: 30 15% 95%;
+    --muted-foreground: 20 10% 45%;
+
+    /* Accent: Deep warm brown */
+    --accent: 20 30% 20%;
+    --accent-foreground: 30 20% 98%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Status Colors */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 20 20% 10%;
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 30 15% 88%;
+    --input: 30 15% 88%;
+    --ring: 24 85% 52%;
+
+    --radius: 0.625rem;
+
+    /* Sidebar - Dark industrial theme */
+    --sidebar-background: 20 25% 12%;
+    --sidebar-foreground: 30 20% 90%;
+    --sidebar-primary: 24 85% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 20 20% 18%;
+    --sidebar-accent-foreground: 30 20% 90%;
+    --sidebar-border: 20 15% 20%;
+    --sidebar-ring: 24 85% 52%;
+
+    /* Custom shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(20 20% 10% / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(20 20% 10% / 0.1), 0 2px 4px -2px hsl(20 20% 10% / 0.1);
+    --shadow-lg: 0 10px 15px -3px hsl(20 20% 10% / 0.1), 0 4px 6px -4px hsl(20 20% 10% / 0.1);
+  }
+
+  .dark {
+    --background: 20 20% 8%;
+    --foreground: 30 20% 95%;
+
+    --card: 20 20% 12%;
+    --card-foreground: 30 20% 95%;
+
+    --popover: 20 20% 12%;
+    --popover-foreground: 30 20% 95%;
+
+    --primary: 24 85% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 20 15% 18%;
+    --secondary-foreground: 30 20% 90%;
+
+    --muted: 20 15% 18%;
+    --muted-foreground: 30 10% 60%;
+
+    --accent: 24 60% 25%;
+    --accent-foreground: 30 20% 95%;
+
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 20 15% 22%;
+    --input: 20 15% 22%;
+    --ring: 24 85% 55%;
+
+    --sidebar-background: 20 25% 8%;
+    --sidebar-foreground: 30 20% 90%;
+    --sidebar-primary: 24 85% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 20 20% 14%;
+    --sidebar-accent-foreground: 30 20% 90%;
+    --sidebar-border: 20 15% 15%;
+    --sidebar-ring: 24 85% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-muted rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted-foreground/30 rounded-full hover:bg-muted-foreground/50;
+  }
+}
+
+@layer components {
+  /* Status badges */
+  .status-waiting {
+    @apply bg-warning/15 text-warning border-warning/30;
+  }
+  
+  .status-processing {
+    @apply bg-info/15 text-info border-info/30;
+  }
+  
+  .status-delivering {
+    @apply bg-purple-500/15 text-purple-600 border-purple-500/30;
+  }
+  
+  .status-done {
+    @apply bg-success/15 text-success border-success/30;
+  }
+  
+  .status-damaged {
+    @apply bg-destructive/15 text-destructive border-destructive/30;
+  }
+
+  .status-cancelled {
+    @apply bg-muted text-muted-foreground border-muted-foreground/30;
+  }
+
+  .status-dispatched {
+    @apply bg-primary/15 text-primary border-primary/30;
+  }
+
+  /* Card hover effect */
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5;
+  }
+
+  /* Glass effect */
+  .glass {
+    @apply bg-background/80 backdrop-blur-sm;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideInRight {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+}
