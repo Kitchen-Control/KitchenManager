@@ -115,10 +115,10 @@ export default function Users() {
                   <SelectItem value="1">Admin</SelectItem>
                   <SelectItem value="2">Manager</SelectItem>
                   <SelectItem value="3">Store Staff</SelectItem>
-                  <SelectItem value="4">Kitchen Manager</SelectItem>
-                  <SelectItem value="5">Supply Coordinator</SelectItem>
+                  <SelectItem value="4">Supply Coordinator</SelectItem>
+                  <SelectItem value="5">Warehouse</SelectItem>
                   <SelectItem value="6">Shipper</SelectItem>
-                  <SelectItem value="7">Warehouse</SelectItem>
+                  <SelectItem value="7">Kitchen Manager</SelectItem>
                 </SelectContent>
               </Select>
 
