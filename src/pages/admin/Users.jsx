@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Loader2, Trash2, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { ROLE_ID } from '../../data/constants';
+import { useAuth } from '../../contexts/AuthContext';
 
 export default function Users() {
   const [users, setUsers] = useState([]);
@@ -16,6 +17,7 @@ export default function Users() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const { user: currentUser } = useAuth();   // user đang đăng nhập
 
   const [formData, setFormData] = useState({
     username: '',
@@ -43,16 +45,22 @@ export default function Users() {
   }, []);
 
   const handleDelete = async (userId) => {
-    if (!confirm('Bạn có chắc chắn muốn xóa người dùng này? Hành động này không thể hoàn tác.')) return;
+  // Không cho tự xoá chính mình
+  if (currentUser && Number(currentUser.user_id) === Number(userId)) {
+    toast.error('Bạn không thể tự xoá tài khoản của mình');
+    return;
+  }
 
-    try {
-      await deleteUser(userId);
-      toast.success('Xóa người dùng thành công');
-      fetchData();
-    } catch (error) {
-      toast.error('Lỗi xóa người dùng: ' + error.message);
-    }
-  };
+  if (!confirm('Bạn có chắc chắn muốn xóa người dùng này? Hành động này không thể hoàn tác.')) return;
+
+  try {
+    await deleteUser(userId);
+    toast.success('Xóa người dùng thành công');
+    fetchData();
+  } catch (error) {
+    toast.error('Lỗi xóa người dùng: ' + error.message);
+  }
+};
 
   const handleCreate = async () => {
     if (!formData.username || !formData.password || !formData.fullName || !formData.roleId) {
@@ -163,9 +171,16 @@ export default function Users() {
                   <TableCell>{user.role_name}</TableCell>
                   <TableCell>{user.store_name || '-'}</TableCell>
                   <TableCell className="text-right">
-                    <Button variant="ghost" size="icon" onClick={() => handleDelete(user.user_id)} className="text-red-500 hover:text-red-700 hover:bg-red-50">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {currentUser?.user_id !== user.user_id && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDelete(user.user_id)}
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
