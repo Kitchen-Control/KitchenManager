@@ -38,7 +38,7 @@ export default function ManagerDashboard() {
   };
 
   const activePlans = 0;
-  const pendingOrders = orders.filter((o) => o.status === 'WAITTING').length;
+  const pendingOrders = orders.filter((o) => o.status === 'WAITING').length;
   const lowStockItems = inventories.filter((i) => (i.quantity ?? 0) < 50);
   const expiredInventory = inventories.filter((i) => {
     const expiry = new Date(i.expiry_date || 0);

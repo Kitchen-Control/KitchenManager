@@ -34,8 +34,8 @@ export default function Deliveries() {
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
-    if (!delivery.orders || delivery.orders.length === 0) return 'WAITTING';
-    const hasWaiting = delivery.orders.some(o => o.status === 'WAITTING');
+    if (!delivery.orders || delivery.orders.length === 0) return 'WAITING';
+    const hasWaiting = delivery.orders.some(o => o.status === 'WAITING');
     const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
     const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
     const allDone = delivery.orders.every(o => o.status === 'DONE');
@@ -43,7 +43,7 @@ export default function Deliveries() {
     if (allDone) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
     if (hasProcessing) return 'PROCESSING';
-    return 'WAITTING';
+    return 'WAITING';
   };
 
   const enrichedDeliveries = deliveries.map((d) => ({
@@ -53,7 +53,7 @@ export default function Deliveries() {
     status: calculateDeliveryStatus(d)
   })).sort((a, b) => b.delivery_id - a.delivery_id);
 
-  const waitingDeliveries = enrichedDeliveries.filter((d) => d.status === 'WAITTING' || d.status === 'PROCESSING');
+  const waitingDeliveries = enrichedDeliveries.filter((d) => d.status === 'WAITING' || d.status === 'PROCESSING');
   const processingDeliveries = enrichedDeliveries.filter((d) => d.status === 'DELIVERING');
   const doneDeliveries = enrichedDeliveries.filter((d) => d.status === 'DONE');
 
@@ -89,7 +89,7 @@ export default function Deliveries() {
           </div>
           <StatusBadge status={delivery.status} type="delivery" />
         </div>
-        {(delivery.status === 'WAITTING' || delivery.status === 'PROCESSING') && (
+        {(delivery.status === 'WAITING' || delivery.status === 'PROCESSING') && (
           <Button
             variant="destructive"
             size="sm"
