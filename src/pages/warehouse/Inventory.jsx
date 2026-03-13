@@ -10,6 +10,9 @@ export default function Inventory() {
   const [inventories, setInventories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // UI filter state (chỉ để đổi màu nút)
+  const [filterType, setFilterType] = useState("ALL");
+
   const fetchInventory = async () => {
     setIsLoading(true);
     try {
@@ -39,21 +42,56 @@ export default function Inventory() {
   };
 
   if (isLoading) {
-    return <div className="flex justify-center items-center h-96"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+    return (
+      <div className="flex justify-center items-center h-96">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
+
+      {/* Header */}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Quản lý Tồn kho</h1>
           <p className="text-muted-foreground">Theo dõi số lượng và hạn sử dụng nguyên vật liệu.</p>
         </div>
-        <Button onClick={fetchInventory} variant="outline">
-          <RefreshCw className="mr-2 h-4 w-4" /> Làm mới
-        </Button>
+
+        <div className="flex gap-2">
+          <Button onClick={fetchInventory} variant="outline">
+            <RefreshCw className="mr-2 h-4 w-4" /> Làm mới
+          </Button>
+        </div>
       </div>
 
+      {/* Filter Buttons UI */}
+      {/* Filter Buttons UI */}
+<div className="flex gap-3">
+  <Button
+    variant={filterType === "ALL" ? "default" : "outline"}
+    onClick={() => setFilterType("ALL")}
+  >
+    All
+  </Button>
+
+  <Button
+    variant={filterType === "RAW_SEMI" ? "default" : "outline"}
+    onClick={() => setFilterType("RAW_SEMI")}
+  >
+    Raw / Semi Finished
+  </Button>
+
+  <Button
+    variant={filterType === "FINISHED" ? "default" : "outline"}
+    onClick={() => setFilterType("FINISHED")}
+  >
+    Finished Product
+  </Button>
+</div>
+
+      {/* Inventory Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {inventories.map((item) => {
           const status = getExpiryStatus(item.expiry_date);
@@ -65,28 +103,40 @@ export default function Inventory() {
                 </CardTitle>
                 <Package className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
+
               <CardContent>
-                <div className="text-2xl font-bold">{item.quantity} <span className="text-sm font-normal text-muted-foreground">đơn vị</span></div>
+                <div className="text-2xl font-bold">
+                  {item.quantity} <span className="text-sm font-normal text-muted-foreground">đơn vị</span>
+                </div>
+
                 <div className="mt-2 space-y-1">
                   <div className="text-xs text-muted-foreground flex justify-between">
                     <span>Lô hàng:</span>
                     <span className="font-mono">{item.batch?.batchId || item.batch || 'N/A'}</span>
                   </div>
+
                   <div className={`text-xs px-2 py-1 rounded-full w-fit flex items-center gap-1 ${status.color}`}>
-                    {status.label === 'Đã hết hạn' && <AlertTriangle className="h-3 w-3" />}
-                    {status.label === 'Sắp hết hạn' && <AlertTriangle className="h-3 w-3" />}
-                    <span>HSD: {item.expiry_date ? (() => {
-                      const d = new Date(item.expiry_date);
-                      if (!item.expiry_date.includes('+07:00') && !item.expiry_date.includes('Z')) d.setHours(d.getHours() + 7);
-                      return format(d, 'dd/MM/yyyy');
-                    })() : 'N/A'}</span>
+                    {(status.label === 'Đã hết hạn' || status.label === 'Sắp hết hạn') && (
+                      <AlertTriangle className="h-3 w-3" />
+                    )}
+
+                    <span>
+                      HSD: {item.expiry_date ? (() => {
+                        const d = new Date(item.expiry_date);
+                        if (!item.expiry_date.includes('+07:00') && !item.expiry_date.includes('Z')) {
+                          d.setHours(d.getHours() + 7);
+                        }
+                        return format(d, 'dd/MM/yyyy');
+                      })() : 'N/A'}
+                    </span>
                   </div>
+
                 </div>
               </CardContent>
             </Card>
           );
         })}
-        
+
         {inventories.length === 0 && (
           <div className="col-span-full text-center py-12 text-muted-foreground">
             Kho đang trống.

@@ -41,8 +41,8 @@ export default function CoordinatorDashboard() {
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
-    if (!delivery.orders || delivery.orders.length === 0) return 'WAITTING';
-    const hasWaiting = delivery.orders.some(o => o.status === 'WAITTING');
+    if (!delivery.orders || delivery.orders.length === 0) return 'WAITING';
+    const hasWaiting = delivery.orders.some(o => o.status === 'WAITING');
     const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
     const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
     const allDone = delivery.orders.every(o => o.status === 'DONE');
@@ -50,7 +50,7 @@ export default function CoordinatorDashboard() {
     if (allDone) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
     if (hasProcessing) return 'PROCESSING';
-    return 'WAITTING';
+    return 'WAITING';
   };
 
   const enrichedDeliveries = deliveries.map(d => ({
@@ -59,7 +59,7 @@ export default function CoordinatorDashboard() {
   }));
 
   const sortedOrders = [...orders].sort((a, b) => b.order_id - a.order_id);
-  const waitingOrders = sortedOrders.filter((o) => o.status === 'WAITTING' && !o.delivery_id);
+  const waitingOrders = sortedOrders.filter((o) => o.status === 'WAITING' && !o.delivery_id);
   const processingDeliveries = enrichedDeliveries.filter((d) => d.status === 'DELIVERING');
   const today = new Date().toISOString().split('T')[0];
   const todayDeliveries = enrichedDeliveries.filter((d) => (d.delivery_date || d.createdAt || '').startsWith(today));
