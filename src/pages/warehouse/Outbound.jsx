@@ -23,7 +23,7 @@ export default function WarehouseOutbound() {
     try {
       const [pOrders, wOrders, dispOrders, delOrders, doneOrders, damagedOrders, canceledOrders] = await Promise.all([
         getOrdersByStatus('PROCESSING').catch(() => []),
-        getOrdersByStatus('WAITTING').catch(() => []),
+        getOrdersByStatus('WAITING').catch(() => []),
         getOrdersByStatus('DISPATCHED').catch(() => []),
         getOrdersByStatus('DELIVERING').catch(() => []),
         getOrdersByStatus('DONE').catch(() => []),
@@ -196,17 +196,17 @@ export default function WarehouseOutbound() {
 
   // derived data
   const pickingOrders = allOrders.filter(o =>
-    (o.status === 'PROCESSING' || (o.status === 'WAITTING' && o.delivery_id)) &&
+    (o.status === 'PROCESSING' || (o.status === 'WAITING' && o.delivery_id)) &&
     (!orderReceipts[o.order_id] || orderReceipts[o.order_id].length === 0)
   );
 
   const draftOrders = allOrders.filter(o =>
-    (o.status === 'PROCESSING' || o.status === 'WAITTING') &&
+    (o.status === 'PROCESSING' || o.status === 'WAITING') &&
     (orderReceipts[o.order_id] || []).some(r => r.status === 'DRAFT')
   );
 
   const dispatchedOrders = allOrders.filter(o =>
-    (o.status === 'DISPATCHED' || o.status === 'DELIVERING' || o.status === 'PROCESSING' || o.status === 'WAITTING') &&
+    (o.status === 'DISPATCHED' || o.status === 'DELIVERING' || o.status === 'PROCESSING' || o.status === 'WAITING') &&
     (orderReceipts[o.order_id] || []).length > 0 &&
     (orderReceipts[o.order_id] || []).every(r => r.status === 'COMPLETED')
   );
@@ -291,7 +291,7 @@ export default function WarehouseOutbound() {
                     )}
                     {actionType === 'completed' && (
                       <>
-                        {(order.status === 'PROCESSING' || order.status === 'WAITTING') && (
+                        {(order.status === 'PROCESSING' || order.status === 'WAITING') && (
                           <Button onClick={(e) => { e.stopPropagation(); handleDispatchOrder(order); }} disabled={isProcessing} className="w-full bg-blue-600 hover:bg-blue-700">
                             {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Truck className="mr-2 h-4 w-4" />}
                             Bàn giao cho Shipper

@@ -125,7 +125,7 @@ export default function OrderHistory() {
         {storeOrders.map((order) => {
           const details = order.order_details || [];
           const isOpen = openOrders.includes(order.order_id);
-          const canCancel = order.status === 'WAITTING';
+          const canCancel = order.status === 'WAITING';
 
           return (
             <Card key={order.order_id} className="overflow-hidden">

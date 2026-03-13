@@ -33,7 +33,7 @@ export default function Plans() {
       const [plansData, batchesData, waitingOrders, processingOrders] = await Promise.all([
         getProductionPlans(),
         getAllLogBatches(),
-        getOrdersByStatus('WAITTING'),
+        getOrdersByStatus('WAITING'),
         getOrdersByStatus('PROCESSING')
       ]);
 

@@ -87,9 +87,9 @@ export default function Production() {
       await createProLogBatch(payload);
       toast.success(`Đã tạo lô sản xuất (${numBatches} lô = ${totalQuantity} SP) cho: ${selectedDetail.productName}`);
 
-      // Tự động chuyển trạng thái các đơn hàng WAITTING có chứa sản phẩm này sang PROCESSING
+      // Tự động chuyển trạng thái các đơn hàng WAITING có chứa sản phẩm này sang PROCESSING
       try {
-        const waitingOrders = await getOrdersByStatus('WAITTING');
+        const waitingOrders = await getOrdersByStatus('WAITING');
         const ordersToUpdate = waitingOrders.filter(order =>
           order.order_details?.some(detail => Number(detail.product_id) === productId)
         );
