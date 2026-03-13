@@ -4,7 +4,7 @@ Actor: Store User (Role: STORE).
 Hành động:
 User đăng nhập App, xem danh sách FINISHED_PRODUCT.
 Hệ thống tính Tồn kho khả dụng (Available Stock) theo công thức:
-Available = Tổng Inventory (Thực tế) - Tổng (order_details của các đơn WAITING/PROCESSING).
+Available = Tổng Inventory (Thực tế) - Tổng (order_details của các đơn WAITING/PROCESSING/LOADED).
 Store chọn số lượng → Nhấn "Đặt hàng".
 DB Update:
 Tạo bản ghi bảng orders (Status: WAITING).
@@ -16,10 +16,10 @@ Xem danh sách các đơn hàng đang WAITING.
 Chọn nhiều đơn hàng cùng tuyến đường để gom lại.
 Tạo chuyến xe (deliveries) và gán Shipper (shipper_id).
 DB Update:
-Tạo bản ghi bảng deliveries.
+Tạo bản ghi bảng deliveries với trạng thái là WAITING.
 Update orders.delivery_id và chuyển orders.status sang PROCESSING.
 Bước 3: Phân bổ hàng & Tạo Phiếu Xuất (Warehousing - CORE STEP)
-Actor: Kitchen Manager / Warehouse Keeper.
+Actor: Warehouse Keeper.
 Giai đoạn 3.1: Phân bổ tự động (Allocation - Logic FEFO)
 Khi đơn hàng chuyển sang PROCESSING, hệ thống tự động chạy thuật toán FEFO:
 Logic: Quét bảng inventories, tìm các batch_id có hạn sử dụng gần nhất (chưa hết hạn) và còn quantity > 0.
@@ -27,25 +27,31 @@ DB Update: Ghi vào bảng order_detail_fill.
 Ví dụ: Khách đặt 10 cái. Hệ thống tự điền: Lấy 3 cái Batch A + 7 cái Batch B.
 Lưu ý: Lúc này Kho thực tế (inventories) CHƯA BỊ TRỪ, mới chỉ là "giữ chỗ" trên giấy tờ.
 Giai đoạn 3.2: Tạo Phiếu Xuất (Receipt Creation)
-Thủ kho mở App lên, click vào một đơn hàng đang PROCESSING. Lúc này, giao diện (FE) sẽ gọi API để hiển thị chi tiết. API này sẽ query JOIN các bảng orders → order_details → order_detail_fill → log_batches để show ra một danh sách hướng dẫn gắp hàng cực kỳ trực quan.
-Việc của Thủ kho lúc này chỉ là Review (Duyệt). Họ nhìn vào danh sách hệ thống gợi ý trên App, thấy hợp lý, không có gì bất thường. Khi đó, họ mới bấm nút "Tạo Phiếu Xuất Kho". Hành động bấm nút này sẽ gọi xuống Backend để thực thi lệnh INSERT INTO receipts (trạng thái DRAFT, gắn với order_id đó). Phiếu xuất này chính là "tờ lệnh" chính thức để họ cầm đi nhặt hàng vật lý.
-Thủ kho kiểm tra lại thông tin phân bổ trên App.
+Thủ kho mở App lên, xem danh sách đơn hàng đang PROCESSING. Lúc này, giao diện (FE) sẽ gọi API để hiển thị chi tiết. API sẽ query JOIN các bảng orders → order_details → order_detail_fill → log_batches để show ra một danh sách hướng dẫn gắp hàng cực kỳ trực quan.
+Đầu tiên thủ kho tạo receipt với trạng thái DRAFT, lúc này hệ thống chỉ ghi nhận phiếu xuất kho dự kiến và chưa thực hiện trừ kho.
+Sau đó hệ thống sẽ phân bổ hàng cần xuất theo từng batch (dựa trên FEFO hoặc FIFO) và hiển thị trên app để thủ kho biết cần lấy bao nhiêu sản phẩm từ mỗi lô 
 Nhấn nút "Tạo Phiếu Xuất Kho".
+Lúc này phải hiển thị tổng ở trên màn hình cho dễ lấy hàng ( hiển thị trong những order hồi nãy được xác nhất tạo phiếu xuất bản nháp).
 DB Update:
 Tạo bản ghi bảng receipts (Status: DRAFT).
 Link receipts.order_id với đơn hàng tương ứng.
 Giai đoạn 3.3: Xác nhận Xuất kho (Dispatched)
 Thủ kho đi nhặt hàng theo đúng Batch đã phân bổ, mang ra khu vực giao hàng.
+Sau khi kiểm tra xong và bấm xác nhận xuất kho, hệ thống sẽ chuyển receipt sang trạng thái COMPLETED. Lúc này hệ thống mới tạo các dòng inventory_transactions tương ứng với từng batch và cập nhật lại số lượng tồn kho trong bảng inventories.
 Nhấn nút "Hoàn tất Xuất kho" (Confirm).
+Một khi xác nhận đã xuất kho, order status cũng chuyển thành DISPATCHED
 DB Update:
 Update receipts.status → COMPLETED.
 Hệ thống tự động (Trigger/Service): Dựa vào order_detail_fill, tạo các dòng inventory_transactions (Type: EXPORT) và gán receipt_id.
 Trừ số lượng trong bảng inventories.
+order.status tự động cập nhật thành DISPATCHED
 Bước 4: Giao hàng (Shipping)
 Actor: Shipper.
 Hành động:
 Shipper nhận "Phiếu Xuất Kho" (receipts bản cứng hoặc trên App) và hàng hóa.
-Shipper nhận hàng vật lý, mở App và bấm "Bắt đầu đi giao".
+Ban đầu Del
+Shipper nhận hàng vật lý, mở App và bấm "Nhận và giao".
+Lưu ý: đơn phải ở trạng thái Dispatched thì mới cho shipper nhấn nút
 App chuyển trạng thái orders.status → DELIVERING.
 Shipper đi giao theo địa chỉ Store.
 	DB Update:
@@ -62,7 +68,7 @@ Store vào đánh giá đơn hàng → Tạo bản ghi quality_feedbacks.
 FLOW 2: QUY TRÌNH SẢN XUẤT (INTERNAL PRODUCTION)
 Bước 1: Lập Kế hoạch (Planning)
 Actor: Manager.
-Hành động: Tạo production_plans và production_plan_details (dựa trên công thức recipes để tính toán nguyên liệu cần thiết).
+Hành động: Tạo production_plans và production_plan_details (dựa trên công thức recipes để tính toán nguyên liệu cần thiết). production_plans trạng thái mặc định PROCESSING
 Bước 2: Thực hiện Sản xuất (Production)
 Actor: Central Kitchen.
 Hành động:
@@ -70,22 +76,22 @@ Bếp nhận kế hoạch, bắt đầu nấu.
 Tạo ra các Lô sản phẩm (log_batches) với type = PRODUCTION.
 Ban đầu log_batches.status = PROCESSING.
 Bắt buộc gắn log_batches.plan_id để biết lô này thuộc kế hoạch nào.
+Trong 1 production_plans sẽ chứa nhiều log_batch cần làm, khi toàn bộ log_batch DONE hết thì production_plans sẽ tự động chuyển thành DONE. Chỉ cần 1 trong những log_batch trong production_plan đó mà còn PROCESSING → production_plan vẫn còn ở status PROCESSING (ko cho phép chuyển sang DONE vì còn log_batch chưa sản xuất xong).
 Bước 3: Nhập kho Thành phẩm (Inbound)
 Actor: Warehouse
 Hành động:
-Khi bếp báo "Nấu xong", Manager kiểm tra chất lượng.
-Chuyển log_batches.status → DONE.
+Chuyển log_batches.status → WAITING_TO_CONFIRM
 Nhập expiry_date (hoặc hệ thống tự tính dựa trên shelf_life_days của Product).
 DB Update (Auto): Hệ thống tự động tạo inventory_transactions (Type: IMPORT) → Tăng số lượng trong bảng inventories.
 
-FLOW 3: QUY TRÌNH NHẬP MUA (PROCUREMENT)
+FLOW 3: QUY TRÌNH NHẬP MUA NGUYÊN LIỆU (PROCUREMENT)
 Bước 1: Mua hàng & Nhận hàng
-Actor: Store/Kitchen Manager.
+Actor: Warehouse.
 Hành động: Mua nguyên vật liệu (Raw Material) từ nhà cung cấp bên ngoài mang về kho.
 Bước 2: Ghi nhận Lô hàng (Recording)
-Actor: Kitchen Manager.
+Actor: Warehouse.
 Hành động: Tạo mới log_batches.
-type: PURCHASE.
+type: PURCHASE. (chỉ cho warehouse xem PURCHASE)
 product_id: Chọn nguyên liệu.
 plan_id: NULL (Mua ngoài, không theo kế hoạch SX).
 status: DONE (Hàng mua về dùng luôn).
@@ -95,23 +101,30 @@ Logic Hệ thống:
 Ngay khi log_batches (Purchase) được lưu với status DONE.
 Hệ thống tự động tạo inventory_transactions (Type: IMPORT).
 Cộng quantity vào bảng inventories.
-
- FLOW 4: QUY TRÌNH KIỂM SOÁT HẾT HẠN & HỦY (WASTE)
-Bước 1: Quét Hết hạn (Automation)
-Actor: System (Cron Job chạy hàng đêm).
-Logic:
-SELECT * FROM inventories WHERE expiry_date < TODAY AND quantity > 0.
-Nếu tìm thấy: Update trạng thái log_batches.status → EXPIRED.
-Gửi thông báo cảnh báo cho Manager.
-Lưu ý: Hàng EXPIRED sẽ không được tính vào Available_Stock ở Flow 1.
-Bước 2: Xử lý Hủy hàng thực tế (Disposal)
-Actor: Manager.
-Hành động:
-Kiểm tra kho, đem hàng hết hạn đi tiêu hủy.
-Vào App chọn chức năng "Xuất hủy".
+ 
+FLOW 4: QUY TRÌNH KIỂM SOÁT VÀ XUẤT HỦY HÀNG HẾT HẠN (WASTE MANAGEMENT)
+Bước 1: Quét tự động và "Đóng băng" lô hàng (System Automation)
+Actor: Hệ thống (Cron-Job chạy ngầm lúc 00:01 sáng mỗi ngày).
+Hành động: * Hệ thống quét bảng log_batches kết hợp với bảng inventories.
+Nó sẽ tìm những lô hàng thỏa mãn 2 điều kiện: Đã qua Hạn sử dụng (expiry_date < CURRENT_DATE) VÀ Số lượng trong kho vẫn còn (quantity > 0).
 DB Update:
-Tạo inventory_transactions (Type: EXPORT, Note: "Hủy hàng hết hạn").
-Số lượng trong inventories giảm về 0.
-Tạo bản ghi bảng reports (Type: WASTE) để báo cáo tài chính.
-
-
+Cập nhật log_batches.status = WAITING_TO_CANCEL (Chờ xuất hủy).
+Side-effect (Hệ quả đi kèm):
+Cảnh báo: Gửi một Notification (thông báo đỏ) lên App cho Manager và Thủ kho: "Phát hiện [X] lô nguyên liệu đã hết hạn, vui lòng tiến hành xuất hủy!".
+Chốt chặn an toàn (Cực kỳ quan trọng): Ngay khoảnh khắc trạng thái chuyển thành WAITING_TO_CANCEL, số lượng của lô hàng này lập tức bị loại trừ khỏi công thức tính Available_Stock ở Flow 1. (Mặc dù hàng vẫn đang nằm trong kho vật lý, nhưng trên App, Cửa hàng sẽ không bao giờ nhìn thấy và không thể đặt mua được nữa).
+Bước 2: Xác nhận và Tiêu hủy vật lý (Manual Disposal Execution)
+Actor: Thủ kho (Warehouse Keeper).
+Hành động:
+Sáng hôm sau, Thủ kho mở App, vào khu vực "Danh sách chờ xuất hủy". App sẽ hiển thị toàn bộ các lô đang ở trạng thái WAITING_TO_CANCEL.
+Thủ kho nhìn vào danh sách, đi ra các kệ hàng để nhặt đúng các rổ nguyên liệu thiu/hỏng đó mang ra khu vực tập kết rác.
+Sau khi đã ném hàng đi, Thủ kho thao tác trên App: Chọn các lô đã vứt và bấm nút "Hoàn tất Xuất hủy".
+DB Update:
+Bảng log_batches: Cập nhật status = DAMAGED(nhằm mục đích đóng sổ vĩnh viễn vòng đời của lô hàng này).
+Bảng inventory_transactions: Tạo một bản ghi mới (Type: EXPORT, Note: "Thủ kho xác nhận xuất hủy hàng hết hạn", liên kết đúng với batch_id vừa vứt).
+Bảng inventories: Trừ trực tiếp quantity của lô đó về 0 (Chính thức xóa sổ khỏi kho thực tế).
+Bước 3: Ghi nhận hao phí tài chính (Financial Reporting)
+Actor: System (Tự động chạy ngầm ngay sau Bước 2).
+Hành động: Hệ thống tổng hợp lại số lượng hàng vừa vứt đi để báo cáo thiệt hại.
+DB Update:
+Tạo bản ghi vào bảng reports (hoặc waste_logs).
+Lưu các thông tin: Type = WASTE, Mã nguyên liệu, Số lượng hủy. Cuối tháng Manager nhìn vào bảng report này sẽ biết nhà hàng đã ném vào thùng rác bao nhiêu tiền để điều chỉnh lại Kế hoạch mua hàng (Flow 3) cho sát thực tế hơn.

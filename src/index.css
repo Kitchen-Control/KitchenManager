@@ -129,23 +129,24 @@
 }
 
 @layer components {
+
   /* Status badges */
   .status-waiting {
     @apply bg-warning/15 text-warning border-warning/30;
   }
-  
+
   .status-processing {
     @apply bg-info/15 text-info border-info/30;
   }
-  
+
   .status-delivering {
     @apply bg-purple-500/15 text-purple-600 border-purple-500/30;
   }
-  
+
   .status-done {
     @apply bg-success/15 text-success border-success/30;
   }
-  
+
   .status-damaged {
     @apply bg-destructive/15 text-destructive border-destructive/30;
   }
@@ -183,17 +184,36 @@
   }
 
   @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
   }
 
   @keyframes slideUp {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   @keyframes slideInRight {
-    from { opacity: 0; transform: translateX(20px); }
-    to { opacity: 1; transform: translateX(0); }
+    from {
+      opacity: 0;
+      transform: translateX(20px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
   }
 }

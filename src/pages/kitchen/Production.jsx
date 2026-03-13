@@ -160,9 +160,9 @@ export default function Production() {
           await updateProductionPlanStatus(planId, 'DONE');
           toast.info(`Kế hoạch #${planId} đã hoàn tất và chuyển sang trạng thái DONE!`);
         } catch (updateErr) {
-          console.error('API update status failed, but UI will show DONE:', updateErr);
+          console.error('API update status failed:', updateErr);
         }
-        await fetchPlans();
+        await fetchPlans(); // Re-fetch to update UI
       }
     } catch (error) {
       console.error('Error checking plan status:', error);
@@ -171,16 +171,15 @@ export default function Production() {
 
   const handleCompleteBatch = async (batchId) => {
     try {
+      const batch = batches.find(b => b.batch_id === batchId);
       await updateLogBatchStatus(batchId, 'WAITING_TO_CONFIRM');
       toast.success('Đã hoàn thành lô! Đang chờ Kho xác nhận nhập kho.');
-
-      // Find which plan this batch belongs to and check if plan should be DONE
-      const batch = batches.find(b => b.batch_id === batchId);
+      
       if (batch && (batch.planId || batch.plan_id)) {
         await checkAndUpdatePlanStatus(batch.planId || batch.plan_id);
       }
-
-      fetchPlans();
+      
+      fetchPlans(); // Re-fetch to update UI
     } catch (error) {
       toast.error('Lỗi cập nhật lô: ' + error.message);
     }
@@ -245,7 +244,7 @@ export default function Production() {
               <CardContent className="p-0">
                 <div className="divide-y">
                   {(plan.details || []).map(detail => {
-                    const detailBatches = batches.filter(b => b.planId === plan.planId && b.product_id === detail.productId);
+                    const detailBatches = batches.filter(b => b.planId === plan.planId && b.productId === detail.productId);
                     return (
                       <div key={detail.planDetailId} className="p-4 bg-white hover:bg-orange-50/5 transition-colors">
                         <div className="flex items-center justify-between mb-4">
@@ -257,7 +256,7 @@ export default function Production() {
                           </div>
                           {getCalculatedPlanStatus(plan, batches) !== 'DONE' ? (
                             <Button
-                              onClick={() => openDialog(detail, plan.planId)}
+                              onClick={() => openDialog({ ...detail, startDate: plan.startDate, endDate: plan.endDate }, plan.planId)}
                               size="sm"
                               className="bg-orange-500 hover:bg-orange-600 shadow-sm font-bold"
                             >
@@ -343,13 +342,23 @@ export default function Production() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label className="font-bold text-gray-700">Ngày sản xuất *</Label>
+              <div className="flex justify-between items-center">
+                <Label className="font-bold text-gray-700">Ngày sản xuất *</Label>
+                <span className="text-[10px] text-muted-foreground">
+                  Trong khoảng: {selectedDetail?.startDate && new Date(selectedDetail.startDate).toLocaleDateString('vi-VN')} - {selectedDetail?.endDate && new Date(selectedDetail.endDate).toLocaleDateString('vi-VN')}
+                </span>
+              </div>
               <Input
                 type="date"
+                min={selectedDetail?.startDate ? new Date(selectedDetail.startDate).toISOString().split('T')[0] : ''}
+                max={selectedDetail?.endDate ? new Date(selectedDetail.endDate).toISOString().split('T')[0] : ''}
                 value={batchForm.productionDate}
                 onChange={e => setBatchForm({ ...batchForm, productionDate: e.target.value })}
                 className="focus-visible:ring-orange-500 font-medium"
               />
+              <p className="text-[10px] text-orange-500 font-medium">
+                * Bếp được chọn ngày bắt đầu, không được vượt quá ngày kết thúc kế hoạch.
+              </p>
             </div>
             <div className="p-3 bg-orange-50 text-orange-800 rounded-lg text-xs leading-relaxed border border-orange-100 font-medium italic">
               Lô sản xuất sẽ được tạo với trạng thái ban đầu là <strong>ĐANG NẤU</strong>. Hệ thống tự động tính toán tổng sản phẩm dựa trên số lô đã nhập.

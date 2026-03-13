@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Package, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
+import { Package, ArrowDownToLine, ArrowUpFromLine, AlertTriangle, RefreshCw, Loader2, History } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getInventories, fetchOrders } from '../../data/api';
 
@@ -70,6 +70,13 @@ export default function WarehouseDashboard() {
       path: '/warehouse/waste',
       color: 'bg-red-50 hover:bg-red-100',
       stat: stats.expiringSoon > 0 ? `${stats.expiringSoon} sắp hết hạn` : null,
+    },
+    {
+      title: 'Lịch sử Nhập/Xuất',
+      description: 'Xem toàn bộ lịch sử các giao dịch nhập và xuất kho.',
+      icon: <History className="h-8 w-8 text-orange-500" />,
+      path: '/warehouse/inventory-history',
+      color: 'bg-orange-50 hover:bg-orange-100',
     }
   ];
 

@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { getInventories } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Loader2, Package, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Loader2, Package, AlertTriangle, RefreshCw, History } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
 export default function Inventory() {
+  const navigate = useNavigate();
   const [inventories, setInventories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -44,14 +46,19 @@ export default function Inventory() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Quản lý Tồn kho</h1>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-800">Quản lý Tồn kho</h1>
           <p className="text-muted-foreground">Theo dõi số lượng và hạn sử dụng nguyên vật liệu.</p>
         </div>
-        <Button onClick={fetchInventory} variant="outline">
-          <RefreshCw className="mr-2 h-4 w-4" /> Làm mới
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => navigate('/warehouse/inventory-history')} variant="outline" className="border-blue-200 text-blue-700 hover:bg-blue-50">
+            <History className="mr-2 h-4 w-4" /> Lịch sử Nhập/Xuất
+          </Button>
+          <Button onClick={fetchInventory} variant="outline">
+            <RefreshCw className="mr-2 h-4 w-4" /> Làm mới
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

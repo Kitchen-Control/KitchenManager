@@ -52,6 +52,7 @@ import WarehouseInventory from "./pages/warehouse/Inventory";
 import WarehouseOutbound from "./pages/warehouse/Outbound";
 import WarehouseProcurement from "./pages/warehouse/Procurement";
 import WarehouseWaste from "./pages/warehouse/Waste";
+import InventoryHistory from "./pages/warehouse/InventoryHistory";
 
 const queryClient = new QueryClient();
 
@@ -118,6 +119,7 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[7]}><Outlet /></ProtectedRoute>}>
                   <Route path="/warehouse" element={<WarehouseDashboard />} />
                   <Route path="/warehouse/inventory" element={<WarehouseInventory />} />
+                  <Route path="/warehouse/inventory-history" element={<InventoryHistory />} />
                   <Route path="/warehouse/procurement" element={<WarehouseProcurement />} />
                   <Route path="/warehouse/inbound" element={<BatchLog status="WAITING_TO_CONFIRM" />} />
                   <Route path="/warehouse/outbound" element={<WarehouseOutbound />} />

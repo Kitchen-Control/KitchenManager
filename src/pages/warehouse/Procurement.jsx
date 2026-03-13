@@ -97,23 +97,15 @@ export default function WarehouseProcurement() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Warehouse className="h-8 w-8 text-green-600" /> Quản lý Nhập kho
+            <Warehouse className="h-8 w-8 text-green-600" /> Quản lý Nhập Mua Nguyên Liệu
           </h1>
-          <p className="text-muted-foreground">Xác nhận lô sản xuất và nhập mua nguyên liệu</p>
+          <p className="text-muted-foreground">Nhập mua nguyên liệu và lịch sử nhập mua</p>
         </div>
         <Button variant="outline" onClick={fetchData}><RefreshCw className="h-4 w-4 mr-2" /> Làm mới</Button>
       </div>
 
       <Tabs defaultValue="waiting" onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
-          <TabsTrigger value="waiting" className="relative">
-            Lô chờ xác nhận
-            {waitingBatches.length > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
-                {waitingBatches.length}
-              </span>
-            )}
-          </TabsTrigger>
           <TabsTrigger value="purchase">Nhập mua ngoài</TabsTrigger>
           <TabsTrigger value="history">Lịch sử nhập</TabsTrigger>
         </TabsList>
