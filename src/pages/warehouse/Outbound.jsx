@@ -28,7 +28,7 @@ export default function WarehouseOutbound() {
         getOrdersByStatus('DELIVERING').catch(() => []),
         getOrdersByStatus('DONE').catch(() => []),
         getOrdersByStatus('DAMAGED').catch(() => []),
-        getOrdersByStatus('CANCLED').catch(() => []),
+        getOrdersByStatus('CANCELED').catch(() => []),  
       ]);
 
       const relevantOrders = [...pOrders, ...wOrders, ...dispOrders, ...delOrders, ...doneOrders, ...damagedOrders, ...canceledOrders]
@@ -100,7 +100,7 @@ export default function WarehouseOutbound() {
   };
 
   const handleConfirmReceipt = async (order, receipt) => {
-    if (!confirm(`Xác nhận Hoàn tất Xuất kho cho Phiếu #${receipt.receipt_id}?\nHành động này sẽ trừ kho thực tế.`)) return;
+    if (!confirm(`Xác nhận Hoàn tất Xuất kho cho Phiếu #${receipt.receipt_id}?`)) return;
     setProcessingOrderId(order.order_id);
     try {
       await confirmReceipt(receipt.receipt_id);
@@ -156,19 +156,7 @@ export default function WarehouseOutbound() {
     }
   };
 
-  const handleCompleteOrder = async (order) => {
-    if (!confirm(`Xác nhận HOÀN TẤT XUẤT KHO cho đơn #${order.order_id}?\nĐơn hàng sẽ được chuyển vào mục Lịch sử.`)) return;
-    setProcessingOrderId(order.order_id);
-    try {
-      await completeOrder(order.order_id);
-      toast.success('Xuất kho hoàn tất thành công!');
-      await fetchData();
-    } catch (error) {
-      toast.error('Lỗi hoàn tất xuất kho: ' + error.message);
-    } finally {
-      setProcessingOrderId(null);
-    }
-  };
+
 
   const toggleOrderChecked = (e, orderId) => {
     e.stopPropagation();
@@ -263,7 +251,7 @@ export default function WarehouseOutbound() {
               {isExpanded && (
                 <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-1">
                   <div className="space-y-2 bg-gray-50/50 p-3 rounded border">
-                    <p className="font-semibold text-sm mb-2">Chi tiết sản phẩm (không hiển thị lô ở đây):</p>
+                    <p className="font-semibold text-sm mb-2">Chi tiết sản phẩm:</p>
                     {(order.order_details || []).map(detail => (
                       <div key={detail.order_detail_id} className="flex justify-between items-center text-sm border-b pb-1 last:border-0 last:pb-0">
                         <span>{detail.product_name}</span>
@@ -297,28 +285,13 @@ export default function WarehouseOutbound() {
                             Bàn giao cho Shipper
                           </Button>
                         )}
-                        {order.status === 'DISPATCHED' && (
+                        {order.status === 'DISPATCHED' || order.status === 'DELIVERING' && (
                           <div className="w-full p-2.5 bg-yellow-50 text-yellow-700 text-sm text-center rounded border border-yellow-200 flex items-center justify-center gap-2 font-bold italic">
-                            <Loader2 className="h-4 w-4 animate-spin" /> Chờ Shipper "Nhận và giao"
+                            <CheckCircle2 className="h-4 w-4 text-green-500" /> Đã hoàn tất thủ tục xuất kho
                           </div>
                         )}
-                        {order.status === 'DELIVERING' && (
-                          <Button onClick={(e) => { e.stopPropagation(); handleCompleteOrder(order); }} disabled={isProcessing} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold shadow-md">
-                            {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                            Xác nhận hoàn tất xuất kho
-                          </Button>
-                        )}
+                        
                       </>
-                    )}
-                    {actionType === 'history' && (
-                      <div className="w-full p-2 bg-slate-50 text-slate-600 text-xs text-center rounded border border-slate-200 flex items-center justify-center gap-2 font-medium">
-                        <CheckCircle2 className="h-4 w-4 text-green-500" /> Đã hoàn tất thủ tục xuất kho
-                      </div>
-                    )}
-                    {actionType === 'dispatched' && (
-                      <div className="w-full p-2 bg-blue-50 text-blue-700 text-xs text-center rounded border border-blue-200 flex items-center justify-center gap-2 font-medium">
-                        <Truck className="h-4 w-4" /> Đã điều phối tới Shipper
-                      </div>
                     )}
                   </div>
                 </CardContent>
@@ -400,9 +373,7 @@ export default function WarehouseOutbound() {
     <div className="p-6 space-y-6 animate-fade-in max-w-6xl mx-auto">
       <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Quản lý Xuất kho</h1>
-          <p className="text-muted-foreground text-sm mt-1">Luồng trạng thái: Soạn hàng ➔ Draft ➔ Completed ➔ Dispatched</p>
-        </div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-800">Quản lý Xuất kho</h1>        </div>
         <Button variant="outline" onClick={fetchData}><RefreshCw className="mr-2 h-4 w-4" /> Làm mới</Button>
       </div>
 
@@ -416,9 +387,6 @@ export default function WarehouseOutbound() {
           </TabsTrigger>
           <TabsTrigger value="dispatched" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
             3. Xuất kho {dispatchedOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-700">{dispatchedOrders.length}</Badge>}
-          </TabsTrigger>
-          <TabsTrigger value="history" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            4. Lịch sử {historyOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-slate-100 text-slate-700">{historyOrders.length}</Badge>}
           </TabsTrigger>
         </TabsList>
 
