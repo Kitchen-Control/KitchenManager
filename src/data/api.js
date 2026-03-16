@@ -50,7 +50,7 @@ function mapProduct(p) {
     product_type: p.productType,
     unit: p.unit,
     shelf_life_days: p.shelfLifeDays,
-    available_stock: p.availableStock ?? p.available_stock ?? p.stock ?? 0,
+    available_stock: p.availableStock ?? 0,
     image: p.img || '📦',
   };
 }

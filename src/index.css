@@ -3,9 +3,7 @@
 @tailwind utilities;
 
 @layer base {
-  @import 'leaflet/dist/leaflet.css';
-
-:root {
+  :root {
     /* Warm Kitchen Theme - Industrial Professional */
     --background: 30 20% 98%;
     --foreground: 20 20% 10%;
