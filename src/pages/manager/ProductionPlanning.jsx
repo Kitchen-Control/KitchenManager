@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { getProducts, getProductionPlans, createProductionPlan, getProductionPlanDetails } from '../../data/api';
+import { getProducts, getProductionPlans, createProductionPlan, getProductionPlanDetails, updateProductionPlan, updateProductionPlanStatus } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
+import { PRODUCTION_PLAN_STATUS } from '../../data/constants';
 
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -20,6 +21,7 @@ export default function ProductionPlanning() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [formData, setFormData] = useState({
+    planId: null,
     startDate: '',
     endDate: '',
     note: '',
@@ -33,7 +35,7 @@ export default function ProductionPlanning() {
         getProducts().catch(() => []),
         getProductionPlans().catch(() => [])
       ]);
-      setProducts((prodData || []).filter(p => p.product_type === 'FINISHED_PRODUCT'));
+      setProducts((prodData || []).filter(p => p.product_type !== 'RAW_MATERIAL'));
 
       // Fetch details for each plan if not already included
       const plansWithDetails = await Promise.all((planData || []).map(async (plan) => {
@@ -100,7 +102,7 @@ export default function ProductionPlanning() {
         planDate: new Date().toISOString().split('T')[0],
         startDate: formData.startDate,
         endDate: formData.endDate,
-        status: 'PROCESSING',
+        status: 'DRAFT',
         note: formData.note,
         details: formData.details.map(d => ({
           productId: Number(d.productId),
@@ -109,16 +111,46 @@ export default function ProductionPlanning() {
         }))
       };
 
-      await createProductionPlan(payload);
+      if (formData.planId) {
+        await updateProductionPlan(formData.planId, payload);
+        toast.success('Cập nhật kế hoạch sản xuất thành công!');
+      } else {
+        await createProductionPlan(payload);
+        toast.success('Tạo kế hoạch sản xuất thành công!');
+      }
 
-      toast.success('Tạo kế hoạch sản xuất thành công!');
       setIsOpen(false);
-      setFormData({ startDate: '', endDate: '', note: '', details: [] });
+      setFormData({ planId: null, startDate: '', endDate: '', note: '', details: [] });
       loadData();
     } catch (error) {
       toast.error(error.message || 'Lỗi tạo kế hoạch');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleEdit = (plan) => {
+    setFormData({
+      planId: plan.planId,
+      startDate: plan.startDate,
+      endDate: plan.endDate,
+      note: plan.note || '',
+      details: plan.details.map(d => ({
+        productId: String(d.productId),
+        quantity: d.quantity,
+        note: d.note || ''
+      }))
+    });
+    setIsOpen(true);
+  };
+
+  const handleStatusUpdate = async (planId, newStatus) => {
+    try {
+      await updateProductionPlanStatus(planId, newStatus);
+      toast.success(`Đã cập nhật trạng thái kế hoạch #${planId} thành ${newStatus}`);
+      loadData();
+    } catch (error) {
+      toast.error('Lỗi cập nhật trạng thái: ' + error.message);
     }
   };
 
@@ -141,7 +173,7 @@ export default function ProductionPlanning() {
             <Button className="bg-orange-600 hover:bg-orange-700 shadow-md font-bold text-white"><Calendar className="mr-2 h-4 w-4" /> Tạo kế hoạch mới</Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
-            <DialogHeader><DialogTitle className="text-xl font-bold text-orange-600">Tạo Kế hoạch Sản xuất</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle className="text-xl font-bold text-orange-600">{formData.planId ? 'Cập nhật Kế hoạch' : 'Tạo Kế hoạch Sản xuất'}</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -186,7 +218,7 @@ export default function ProductionPlanning() {
             <div className="flex justify-end gap-2 border-t pt-4">
               <Button variant="outline" onClick={() => setIsOpen(false)}>Hủy</Button>
               <Button onClick={handleSubmit} disabled={isSubmitting} className="bg-orange-600 hover:bg-orange-700 text-white font-bold px-6">
-                {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Xác nhận tạo kế hoạch'}
+                {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (formData.planId ? 'Lưu thay đổi' : 'Xác nhận tạo kế hoạch')}
               </Button>
             </div>
           </DialogContent>
@@ -229,11 +261,16 @@ export default function ProductionPlanning() {
                     </div>
                     <div className="flex items-center gap-6">
                       <div className="text-right">
-                        <Badge className={`${plan.status === 'DONE' ? 'bg-green-100 text-green-800' :
-                          plan.status === 'PROCESSING' ? 'bg-blue-100 text-blue-800' :
-                            'bg-orange-100 text-orange-800'
-                          } uppercase tracking-tighter text-[10px] font-black px-3`}>
-                          {plan.status || 'PROCESSING'}
+                        <Badge className={`${
+                          plan.status === 'DONE' ? 'bg-green-100 text-green-800 border-green-200' :
+                          plan.status === 'COMPLETE_ONE_SECTION' ? 'bg-teal-100 text-teal-800 border-teal-200' :
+                          plan.status === 'PROCESSING' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                          plan.status === 'WAITING' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                          plan.status === 'DRAFT' ? 'bg-gray-100 text-gray-600 border-gray-200' :
+                          plan.status === 'CANCEL' || plan.status === 'CANCELLED' ? 'bg-red-100 text-red-800 border-red-200' :
+                            'bg-orange-100 text-orange-800 border-orange-200'
+                          } border tracking-tighter text-[10px] font-black px-3`}>
+                          {PRODUCTION_PLAN_STATUS[plan.status]?.label || plan.status}
                         </Badge>
                         <p className="text-[10px] font-bold mt-1.5 uppercase text-muted-foreground tracking-widest">{plan.details?.length || 0} Sản phẩm</p>
                       </div>
@@ -263,6 +300,20 @@ export default function ProductionPlanning() {
                         {plan.note && (
                           <div className="mt-3 p-3 bg-white rounded-lg border border-dashed text-xs text-muted-foreground italic">
                             <strong>Ghi chú kế hoạch:</strong> {plan.note}
+                          </div>
+                        )}
+                        
+                        {plan.status === 'DRAFT' && (
+                          <div className="mt-4 flex gap-2 justify-end pt-2 border-t">
+                            <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(plan); }}>
+                              Sửa chi tiết
+                            </Button>
+                            <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleStatusUpdate(plan.planId, 'CANCELLED'); }}>
+                              Hủy kế hoạch
+                            </Button>
+                            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white font-bold" onClick={(e) => { e.stopPropagation(); handleStatusUpdate(plan.planId, 'WAITING'); }}>
+                              Duyệt kế hoạch
+                            </Button>
                           </div>
                         )}
                       </div>

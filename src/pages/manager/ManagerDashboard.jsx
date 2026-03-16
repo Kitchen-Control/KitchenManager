@@ -38,7 +38,7 @@ export default function ManagerDashboard() {
   };
 
   const activePlans = 0;
-  const pendingOrders = orders.filter((o) => o.status === 'WAITTING').length;
+  const pendingOrders = orders.filter((o) => o.status === 'WAITING').length;
   const lowStockItems = inventories.filter((i) => (i.quantity ?? 0) < 50);
   const expiredInventory = inventories.filter((i) => {
     const expiry = new Date(i.expiry_date || 0);
@@ -47,7 +47,7 @@ export default function ManagerDashboard() {
   // Note: pendingImportBatches cần API Production Batches từ backend
   // Hiện tại để [], khi backend bổ sung API sẽ thay thế bằng dữ liệu thật
   const pendingImportBatches = [];
-  const finishedProducts = products.filter((p) => p.product_type === 'FINISHED_PRODUCT');
+  const finishedProducts = products.filter((p) => p.product_type !== 'RAW_MATERIAL');
 
   const handleImportBatch = () => {
     toast.info('Chức năng nhập kho từ lô sản xuất cần API Production Batches.');

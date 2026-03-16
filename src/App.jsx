@@ -52,6 +52,7 @@ import WarehouseInventory from "./pages/warehouse/Inventory";
 import WarehouseOutbound from "./pages/warehouse/Outbound";
 import WarehouseProcurement from "./pages/warehouse/Procurement";
 import WarehouseWaste from "./pages/warehouse/Waste";
+import WarehouseReports from "./pages/warehouse/Reports";
 import InventoryHistory from "./pages/warehouse/InventoryHistory";
 
 const queryClient = new QueryClient();
@@ -116,14 +117,15 @@ const App = () => (
                 </Route>
 
                 {/* Warehouse routes (ID 7) */}
-                <Route element={<ProtectedRoute allowedRoles={[7]}><Outlet /></ProtectedRoute>}>
-                  <Route path="/warehouse" element={<WarehouseDashboard />} />
-                  <Route path="/warehouse/inventory" element={<WarehouseInventory />} />
-                  <Route path="/warehouse/inventory-history" element={<InventoryHistory />} />
-                  <Route path="/warehouse/procurement" element={<WarehouseProcurement />} />
-                  <Route path="/warehouse/inbound" element={<BatchLog status="WAITING_TO_CONFIRM" />} />
-                  <Route path="/warehouse/outbound" element={<WarehouseOutbound />} />
-                  <Route path="/warehouse/waste" element={<WarehouseWaste />} />
+                <Route path="/warehouse" element={<ProtectedRoute allowedRoles={[7]}><Outlet /></ProtectedRoute>}>
+                  <Route index element={<WarehouseDashboard />} />
+                  <Route path="inventory" element={<WarehouseInventory />} />
+                  <Route path="inventory-history" element={<InventoryHistory />} />
+                  <Route path="procurement" element={<WarehouseProcurement />} />
+                  <Route path="inbound" element={<BatchLog status="WAITING_TO_CONFIRM" />} />
+                  <Route path="outbound" element={<WarehouseOutbound />} />
+                  <Route path="waste" element={<WarehouseWaste />} />
+                  <Route path="reports" element={<WarehouseReports />} />
                 </Route>
 
                 {/* Admin routes */}

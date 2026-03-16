@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDeliveries, getAllUsers, getAllStores, deleteDelivery } from '../../data/api';
+import { getDeliveries, getAllUsers, getAllStores, deleteDelivery, updateDeliveryStatus } from '../../data/api';
 import { toast } from '../../components/ui/sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -14,6 +14,7 @@ import {
   Calendar,
   Package,
   Phone,
+  XCircle,
 } from 'lucide-react';
 import {
   Accordion,
@@ -26,24 +27,27 @@ export default function Deliveries() {
   const [deliveries, setDeliveries] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchData = () => {
     getDeliveries()
       .then((data) => setDeliveries(Array.isArray(data) ? data : []))
       .catch(() => setDeliveries([]))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchData();
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
-    if (!delivery.orders || delivery.orders.length === 0) return 'WAITTING';
-    const hasWaiting = delivery.orders.some(o => o.status === 'WAITTING');
+    if (!delivery.orders || delivery.orders.length === 0) return 'WAITING';
+    const hasWaiting = delivery.orders.some(o => o.status === 'WAITING');
     const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
     const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
-    const allDone = delivery.orders.every(o => o.status === 'DONE');
-
-    if (allDone) return 'DONE';
+    const allFinished = delivery.orders.every(o => ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(o.status));
+    if (allFinished) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
     if (hasProcessing) return 'PROCESSING';
-    return 'WAITTING';
+    return 'WAITING';
   };
 
   const enrichedDeliveries = deliveries.map((d) => ({
@@ -53,7 +57,7 @@ export default function Deliveries() {
     status: calculateDeliveryStatus(d)
   })).sort((a, b) => b.delivery_id - a.delivery_id);
 
-  const waitingDeliveries = enrichedDeliveries.filter((d) => d.status === 'WAITTING' || d.status === 'PROCESSING');
+  const waitingDeliveries = enrichedDeliveries.filter((d) => d.status === 'WAITING' || d.status === 'PROCESSING');
   const processingDeliveries = enrichedDeliveries.filter((d) => d.status === 'DELIVERING');
   const doneDeliveries = enrichedDeliveries.filter((d) => d.status === 'DONE');
 
@@ -69,6 +73,18 @@ export default function Deliveries() {
       month: '2-digit',
       year: 'numeric',
     });
+  };
+
+  const handleCancelDelivery = async (deliveryId) => {
+    if (!confirm('Bạn có chắc chắn muốn hủy chuyến giao hàng này? Toàn bộ đơn hàng sẽ được gỡ khỏi chuyến.')) return;
+
+    try {
+      await updateDeliveryStatus(deliveryId, 'CANCELED');
+      toast.success('Đã hủy chuyến giao hàng thành công');
+      fetchData(); // Refresh list
+    } catch (error) {
+      toast.error('Lỗi khi hủy chuyến: ' + error.message);
+    }
   };
 
   const DeliveryCard = ({ delivery }) => (
@@ -89,7 +105,7 @@ export default function Deliveries() {
           </div>
           <StatusBadge status={delivery.status} type="delivery" />
         </div>
-        {(delivery.status === 'WAITTING' || delivery.status === 'PROCESSING') && (
+        {(delivery.status === 'WAITING' || delivery.status === 'PROCESSING') && (
           <Button
             variant="destructive"
             size="sm"
@@ -100,8 +116,7 @@ export default function Deliveries() {
                 await deleteDelivery(delivery.delivery_id);
                 toast.success('Đã hủy chuyến thành công!');
                 // Reload deliveries
-                getDeliveries()
-                  .then((data) => setDeliveries(Array.isArray(data) ? data : []));
+                fetchData();
               } catch (e) {
                 toast.error(e.message || 'Hủy chuyến thất bại');
               }
@@ -136,6 +151,20 @@ export default function Deliveries() {
               </AccordionTrigger>
               <AccordionContent>
                 <div className="space-y-3 pt-2">
+                  {delivery.status === 'WAITING' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCancelDelivery(delivery.delivery_id);
+                      }}
+                    >
+                      <XCircle className="h-4 w-4 mr-1" />
+                      Huỷ chuyến
+                    </Button>
+                  )}
                   <div className="border-t pt-3 space-y-2">
                     {(order.order_details || []).map((detail) => (
                       <div

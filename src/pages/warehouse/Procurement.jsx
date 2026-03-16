@@ -105,43 +105,12 @@ export default function WarehouseProcurement() {
       </div>
 
       <Tabs defaultValue="waiting" onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
+        <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
           <TabsTrigger value="purchase">Nhập mua ngoài</TabsTrigger>
           <TabsTrigger value="history">Lịch sử nhập</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="waiting" className="space-y-4">
-          {waitingBatches.length === 0 ? (
-            <div className="text-center py-12 border border-dashed rounded-lg bg-muted/20">
-              <Package className="h-10 w-10 mx-auto mb-2 opacity-20" />
-              <p className="text-muted-foreground">Không có lô hàng nào cần xác nhận</p>
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              {waitingBatches.map(batch => (
-                <Card key={batch.batch_id}>
-                  <CardContent className="p-4 flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-lg">Lô #{batch.batch_id}</span>
-                        <Badge variant="outline">{batch.product_name}</Badge>
-                        <Badge className="bg-orange-100 text-orange-800">SẢN XUẤT</Badge>
-                      </div>
-                      <p className="text-sm mt-1">
-                        Số lượng: <strong>{batch.quantity}</strong> | 
-                        HSD: {batch.expiry_date ? new Date(batch.expiry_date).toLocaleDateString('vi-VN') : 'N/A'}
-                      </p>
-                      <p className="text-xs text-muted-foreground italic">Từ Bếp Trung Tâm</p>
-                    </div>
-                    <Button onClick={() => handleConfirmBatch(batch.batch_id)} className="bg-green-600 hover:bg-green-700">
-                      <CheckCircle2 className="h-4 w-4 mr-2" /> Xác nhận nhập kho
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
+
 
         <TabsContent value="purchase">
           <Card className="max-w-xl mx-auto">

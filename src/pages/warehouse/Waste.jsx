@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getInventories, createTransaction } from '../../data/api';
+import { getLogBatchesByStatus, updateLogBatchStatus, createTransaction, getProductionPlans, updateProductionPlanStatus, getAllLogBatches } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Loader2, Trash2, AlertOctagon, Package } from 'lucide-react';
@@ -14,14 +14,9 @@ export default function Waste() {
   const fetchExpiredGoods = async () => {
     setIsLoading(true);
     try {
-      const data = await getInventories();
-      // Lọc các sản phẩm đã hết hạn (Expiry Date < Now)
-      const now = new Date();
-      const expired = (data || []).filter(item => {
-        if (!item.expiry_date) return false;
-        return new Date(item.expiry_date) < now && item.quantity > 0;
-      });
-      setExpiredItems(expired);
+      // Flow 4: Look for batches in WAITING_TO_CANCEL status
+      const data = await getLogBatchesByStatus('WAITING_TO_CANCEL');
+      setExpiredItems(data || []);
     } catch (error) {
       toast.error('Lỗi tải dữ liệu: ' + error.message);
     } finally {
@@ -34,20 +29,52 @@ export default function Waste() {
   }, []);
 
   const handleDispose = async (item) => {
-    if (!confirm(`Bạn có chắc chắn muốn tiêu hủy ${item.quantity} ${item.product_name} (Lô: ${item.batch?.batchId || item.batch})?`)) return;
+    if (!confirm(`Bạn có chắc chắn muốn tiêu hủy ${item.quantity} ${item.product_name} (Lô: ${item.batch_id})?`)) return;
 
     setIsProcessing(true);
     try {
-      // Gọi API tạo transaction EXPORT để trừ kho
+      // 1. Update status to DAMAGED
+      await updateLogBatchStatus(item.batch_id, 'DAMAGED');
+
+      // 2. Create EXPORT transaction to officially clear from inventory
       await createTransaction({
         productId: item.product_id,
-        batchId: item.batch_id || (typeof item.batch === 'object' ? item.batch.batchId : item.batch),
+        batchId: item.batch_id,
         type: 'EXPORT',
         quantity: Number(item.quantity),
-        note: 'Tiêu hủy hàng hết hạn (Waste Disposal)'
+        note: 'Xác nhận tiêu hủy hàng hết hạn (Waste Disposal - Flow 4)'
       });
+
+      // 3. Update Plan Status if needed
+      if (item.plan_id || item.planId) {
+        const planId = Number(item.plan_id || item.planId);
+        try {
+          const [allPlans, allBatches] = await Promise.all([
+            getProductionPlans(),
+            getAllLogBatches()
+          ]);
+          const plan = allPlans.find(p => p.planId === planId);
+          if (plan && plan.status !== 'DONE') {
+            // Re-use logic to check if all batches are finished
+            const terminalStatuses = ['DONE', 'DAMAGED', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
+            const pDetails = plan.details || plan.productionPlanDetails || [];
+            const planBatches = allBatches.filter(b => Number(b.planId || b.plan_id) === planId);
+            
+            const allBatchesFinished = planBatches.length > 0 && planBatches.every(b => terminalStatuses.includes(String(b.status || '').toUpperCase()));
+            const allProductsStarted = pDetails.every(detail => 
+              planBatches.some(b => Number(b.productId || b.product_id) === Number(detail.productId || detail.product_id))
+            );
+
+            if (allBatchesFinished && allProductsStarted) {
+              await updateProductionPlanStatus(planId, 'DONE');
+            }
+          }
+        } catch (planErr) {
+          console.error('Plan status sync failed in Waste:', planErr);
+        }
+      }
       
-      toast.success('Đã tiêu hủy thành công!');
+      toast.success('Đã xác nhận tiêu hủy thành công!');
       fetchExpiredGoods(); // Reload list
     } catch (error) {
       toast.error('Lỗi khi tiêu hủy: ' + error.message);
@@ -77,7 +104,7 @@ export default function Waste() {
                 <div className="flex justify-between items-start">
                   <div>
                     <CardTitle className="text-lg font-bold text-red-700">{item.product_name}</CardTitle>
-                    <CardDescription>Lô hàng: {item.batch?.batchId || item.batch || 'N/A'}</CardDescription>
+                    <CardDescription>Mã lô: #{item.batch_id}</CardDescription>
                   </div>
                   <AlertOctagon className="h-6 w-6 text-red-500" />
                 </div>
@@ -106,8 +133,8 @@ export default function Waste() {
             <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center mb-4">
               <Package className="h-6 w-6 text-green-600" />
             </div>
-            <h3 className="text-lg font-medium">Không có hàng hết hạn</h3>
-            <p className="text-muted-foreground">Kho hàng đang ở trạng thái tốt.</p>
+            <h3 className="text-lg font-medium">Không có hàng đang chờ hủy</h3>
+            <p className="text-muted-foreground">Các lô hàng hết hạn sẽ xuất hiện ở đây sau khi hệ thống tự động quét.</p>
           </div>
         )}
       </div>

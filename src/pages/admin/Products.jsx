@@ -83,8 +83,11 @@ export default function Products() {
                 <SelectTrigger><SelectValue placeholder="Loại sản phẩm" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="RAW_MATERIAL">Nguyên liệu thô</SelectItem>
-                  <SelectItem value="SEMI_FINISHED">Bán thành phẩm</SelectItem>
-                  <SelectItem value="FINISHED_PRODUCT">Thành phẩm</SelectItem>
+                  <SelectItem value="MAIN">Món chính</SelectItem>
+                  <SelectItem value="SIDE">Món phụ</SelectItem>
+                  <SelectItem value="BEVERAGE">Đồ uống</SelectItem>
+                  <SelectItem value="DESSERT">Tráng miệng</SelectItem>
+                  <SelectItem value="SAUCE">Xốt</SelectItem>
                 </SelectContent>
               </Select>
 

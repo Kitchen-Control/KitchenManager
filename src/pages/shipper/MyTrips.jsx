@@ -69,10 +69,10 @@ export default function MyTrips() {
    */
   const getDeliveryStatus = (delivery) => {
     const orders = delivery.orders || [];
-    if (orders.length === 0) return 'WAITTING';
-    if (orders.every(o => o.status === 'DONE' || o.status === 'DAMAGED' || o.status === 'CANCLED')) return 'DONE';
+    if (orders.length === 0) return 'WAITING';
+    if (orders.every(o => o.status === 'DONE' || o.status === 'DAMAGED' || o.status === 'CANCELED' || o.status === 'PARTIAL_DELIVERED')) return 'DONE';
     if (orders.some(o => o.status === 'DELIVERING')) return 'DELIVERING';
-    return 'WAITTING';
+    return 'WAITING';
   };
 
   const handleStartDelivery = async (deliveryId, orders) => {
@@ -111,7 +111,7 @@ export default function MyTrips() {
         toast.success(`Đã giao thành công đơn hàng #${selectedOrder.order_id}`);
       } else {
         // DAMAGED — dùng updateOrderStatus
-        await updateOrderStatus(selectedOrder.order_id, 'DAMAGED');
+        await updateOrderStatus(selectedOrder.order_id, 'DAMAGED', selectedOrder.store_id);
         toast.warning(`Đã báo cáo đơn hàng #${selectedOrder.order_id} bị hư hỏng`);
       }
       setShowCompleteDialog(false);
@@ -197,7 +197,7 @@ export default function MyTrips() {
             ))}
           </div>
 
-          {showActions && deliveryStatus === 'WAITTING' && (() => {
+          {showActions && deliveryStatus === 'WAITING' && (() => {
             const allReady = (delivery.orders || []).every(o => {
               const receipts = orderReceipts[o.order_id] || [];
               return o.status === 'DISPATCHED' && receipts.some(r => r.status === 'COMPLETED');
@@ -242,7 +242,7 @@ export default function MyTrips() {
   }
 
   const deliveringTrips = deliveries.filter(d => getDeliveryStatus(d) === 'DELIVERING');
-  const waitingTrips = deliveries.filter(d => getDeliveryStatus(d) === 'WAITTING');
+  const waitingTrips = deliveries.filter(d => getDeliveryStatus(d) === 'WAITING');
   const doneTrips = deliveries.filter(d => getDeliveryStatus(d) === 'DONE');
 
   return (

@@ -57,7 +57,7 @@ export default function OrderAggregation() {
   }, []);
 
   const waitingOrders = orders
-    .filter((o) => o.status === 'WAITTING' && !o.delivery_id)
+    .filter((o) => o.status === 'DISPATCHED' && !o.delivery_id)
     .sort((a, b) => b.order_id - a.order_id)
     .map((o) => ({
       ...o,
@@ -140,8 +140,8 @@ export default function OrderAggregation() {
     <div className="p-6 space-y-6 animate-fade-in">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Gom đơn hàng</h1>
-          <p className="text-muted-foreground">Chọn các đơn hàng để tạo chuyến giao hàng</p>
+          <h1 className="text-2xl font-bold tracking-tight">Gom đơn hàng sẵn sàng</h1>
+          <p className="text-muted-foreground">Chọn các đơn hàng đã xuất kho (DISPATCHED) để tạo chuyến giao hàng</p>
         </div>
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={toggleAll}>

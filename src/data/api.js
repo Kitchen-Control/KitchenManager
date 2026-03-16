@@ -98,16 +98,14 @@ function mapDelivery(d) {
 
 function mapInventory(inv) {
   if (!inv) return null;
-  // InventoryResponse: { inventoryId, product_name, batch, quantity, expiryDate }
-  // product_name is directly on InventoryResponse (snake_case from backend)
   const batchObj = inv.batch;
   return {
     inventory_id: inv.inventoryId,
-    product_id: batchObj?.product?.productId ?? inv.productId ?? null,
-    product_name: inv.product_name ?? inv.productName ?? batchObj?.product?.productName ?? 'N/A',
+    product_id: inv.productId ?? batchObj?.productId ?? batchObj?.product?.productId ?? null,
+    product_name: inv.productName ?? inv.product_name ?? batchObj?.product?.productName ?? batchObj?.productName ?? 'N/A',
     batch: batchObj,
     batch_id: batchObj?.batchId ?? inv.batchId,
-    quantity: inv.quantity,
+    quantity: inv.quantity ?? 0,
     expiry_date: inv.expiryDate ?? inv.expiry_date,
   };
 }
@@ -383,14 +381,38 @@ export const createOrder = async (orderData) => {
   return data ? mapOrder(data) : data;
 };
 
-export const updateOrderStatus = async (orderId, status) => {
+export const updateOrderStatus = async (orderId, status, storeId = '0') => {
   const params = new URLSearchParams();
-  // Fixed: orderId should be in query as per OpenAPI search result previously seen or implied
   params.append('orderId', orderId);
-  params.append('status', status === 'CANCELLED' ? 'CANCLED' : status);
-  const response = await authFetch(`${API_BASE_URL}/orders/update-status/0?${params.toString()}`, { // storeId parameter is in Path /orders/update-status/{storeId}
+  params.append('status', status);
+  if (storeId) params.append('storeId', storeId);
+  const response = await authFetch(`${API_BASE_URL}/orders/update-status/${storeId}?${params.toString()}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
+  });
+  return await handleResponse(response);
+};
+
+/**
+ * Get FEFO (First Expired First Out) suggestion for an order
+ * GET /orders/{orderId}/fefo-suggestion
+ */
+export const getFefoSuggestion = async (orderId) => {
+  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/fefo-suggestion`);
+  return await handleResponse(response);
+};
+
+/**
+ * Confirm batch allocation for an order
+ * POST /orders/{orderId}/confirm-allocation
+ * @param {number} orderId
+ * @param {Array<{batchId: number, quantity: number}>} allocationData
+ */
+export const confirmAllocation = async (orderId, allocationData) => {
+  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/confirm-allocation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(allocationData),
   });
   return await handleResponse(response);
 };
@@ -468,6 +490,21 @@ export const confirmReceipts = async (receiptIds) => {
 
 // Keep compatibility for single ID calls
 export const confirmReceipt = (receiptId) => confirmReceipts([receiptId]);
+
+/** Update receipt status (DRAFT, COMPLETED, CANCELED) 
+ * PATCH /receipts/status - body: { receiptIds: [], status: string }
+ */
+export const updateReceiptStatus = async (receiptIds, status) => {
+  const response = await authFetch(`${API_BASE_URL}/receipts/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      receiptIds: Array.isArray(receiptIds) ? receiptIds : [receiptIds], 
+      status 
+    }),
+  });
+  return await handleResponse(response);
+};
 
 
 
@@ -622,6 +659,16 @@ export const startDelivery = async (deliveryId) => {
   return data ? mapDelivery(data) : data;
 };
 
+/** Update delivery status (WAITING, DELIVERING, DONE, CANCEL) */
+export const updateDeliveryStatus = async (deliveryId, status) => {
+  const finalStatus = status;
+  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${finalStatus}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return await handleResponse(response);
+};
+
 export const deleteDelivery = async (id) => {
   const response = await authFetch(`${API_BASE_URL}/deliveries/${id}`, {
     method: 'DELETE',
@@ -695,7 +742,8 @@ export const getLogBatchesByProductId = async (productId) => {
  * PATCH /log-batches/{batchId}/status?status=...
  */
 export const updateLogBatchStatus = async (batchId, status) => {
-  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${status}`, {
+  const finalStatus = status;
+  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${finalStatus}`, {
     method: 'PATCH',
   });
   const data = await handleResponse(response);
@@ -716,13 +764,19 @@ export const getLogBatchesByStatus = async (status) => {
  * POST /log-batches/production
  */
 export const createProLogBatch = async (batchData) => {
+  // Ensure we send an array of cleaned objects
+  const payload = Array.isArray(batchData) ? batchData : [batchData];
+  const cleanedPayload = payload.map(item => {
+    const { expiryDate, ...rest } = item;
+    return item.expiryDate ? item : rest;
+  });
+
   const response = await authFetch(`${API_BASE_URL}/log-batches/production`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(batchData),
+    body: JSON.stringify(cleanedPayload),
   });
-  const data = await handleResponse(response);
-  return mapLogBatch(data);
+  return await handleResponse(response);
 };
 
 /**
@@ -751,8 +805,18 @@ export const getProductionPlans = async () => {
 };
 
 export const createProductionPlan = async (planData) => {
+  const payload = { ...planData, status: planData.status || 'DRAFT' };
   const response = await authFetch(`${API_BASE_URL}/production-plans`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await handleResponse(response);
+};
+
+export const updateProductionPlan = async (planId, planData) => {
+  const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}`, {
+    method: 'PUT', // Swagger shows PUT for full update
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(planData),
   });
@@ -760,10 +824,7 @@ export const createProductionPlan = async (planData) => {
 };
 
 export const updateProductionPlanStatus = async (planId, status) => {
-  const params = new URLSearchParams();
-  params.append('planId', planId);
-  params.append('status', status);
-  const response = await authFetch(`${API_BASE_URL}/production-plans/update-status?${params.toString()}`, {
+  const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}/status?status=${status}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
   });
