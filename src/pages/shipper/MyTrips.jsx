@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getDeliveriesByShipperId, startDelivery, completeOrder, updateOrderStatus, getReceiptsByOrderId } from '../../data/api';
+import { getDeliveriesByShipperId, updateDeliveryStatus, completeOrder, updateOrderStatus, getReceiptsByOrderId } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -90,7 +90,15 @@ export default function MyTrips() {
         return;
       }
 
-      await startDelivery(deliveryId);
+      // 1. Update delivery status to DELIVERING using the correct API
+      await updateDeliveryStatus(deliveryId, 'DELIVERING');
+      
+      // 2. Also update all orders in this delivery to DELIVERING status
+      // to ensure consistency across the app for shippers and customers.
+      await Promise.all(orders.map(o => 
+        updateOrderStatus(o.order_id, 'DELIVERING', o.store_id || '0').catch(e => console.error(e))
+      ));
+
       toast.success('Đã bắt đầu chuyến giao hàng!');
       reloadData();
     } catch (error) {

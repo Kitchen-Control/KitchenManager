@@ -50,7 +50,7 @@ function mapProduct(p) {
     product_type: p.productType,
     unit: p.unit,
     shelf_life_days: p.shelfLifeDays,
-    available_stock: p.availableStock ?? 0,
+    available_stock: p.availableStock ?? p.available_stock ?? p.stock ?? 0,
     image: p.img || '📦',
   };
 }
@@ -63,6 +63,9 @@ function mapOrderDetail(od) {
     product_id: od.productId ?? od.product?.productId,
     product_name: od.productName ?? od.product?.productName,
     quantity: od.quantity,
+    price: od.price,
+    item_total_price: od.itemTotalPrice,
+    order_detail_fills: Array.isArray(od.orderDetailFills) ? od.orderDetailFills.map(mapOrderDetailFill) : [],
   };
 }
 
@@ -92,6 +95,7 @@ function mapDelivery(d) {
     created_at: d.createdAt,
     shipper_id: d.shipperId ?? d.shipper?.userId,
     shipper_name: d.shipperName ?? d.shipper?.fullName,
+    status: d.status,
     orders: Array.isArray(d.orders) ? d.orders.map(mapOrder) : [],
   };
 }
@@ -99,9 +103,16 @@ function mapDelivery(d) {
 function mapInventory(inv) {
   if (!inv) return null;
   const batchObj = inv.batch;
+  // Deeply extract product_id from nested sources as backup
+  const productId = inv.productId ??
+    batchObj?.productId ??
+    batchObj?.product?.productId ??
+    inv.product_id ??
+    null;
+
   return {
     inventory_id: inv.inventoryId,
-    product_id: inv.productId ?? batchObj?.productId ?? batchObj?.product?.productId ?? null,
+    product_id: productId,
     product_name: inv.productName ?? inv.product_name ?? batchObj?.product?.productName ?? batchObj?.productName ?? 'N/A',
     batch: batchObj,
     batch_id: batchObj?.batchId ?? inv.batchId,
@@ -385,20 +396,19 @@ export const updateOrderStatus = async (orderId, status, storeId = '0') => {
   const params = new URLSearchParams();
   params.append('orderId', orderId);
   params.append('status', status);
-  if (storeId) params.append('storeId', storeId);
+  if (storeId) params.append('storeId', storeId); 
+  
+  // Spec: PATCH /orders/update-status/{storeId}
   const response = await authFetch(`${API_BASE_URL}/orders/update-status/${storeId}?${params.toString()}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
   });
   return await handleResponse(response);
 };
 
-/**
- * Get FEFO (First Expired First Out) suggestion for an order
- * GET /orders/{orderId}/fefo-suggestion
- */
+// FEFO is handled automatically by backend when status moves to PROCESSING.
+// Call getFefoSuggestion to see the calculated batches.
 export const getFefoSuggestion = async (orderId) => {
-  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/fefo-suggestion`);
+  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/allocation-suggestion`);
   return await handleResponse(response);
 };
 
@@ -406,13 +416,13 @@ export const getFefoSuggestion = async (orderId) => {
  * Confirm batch allocation for an order
  * POST /orders/{orderId}/confirm-allocation
  * @param {number} orderId
- * @param {Array<{batchId: number, quantity: number}>} allocationData
+ * @param {Array<{ orderDetailId: number, batchPicks: Array<{batchId: number, quantity: number}> }>} finalAllocations
  */
-export const confirmAllocation = async (orderId, allocationData) => {
+export const confirmAllocation = async (orderId, finalAllocations) => {
   const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/confirm-allocation`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(allocationData),
+    body: JSON.stringify({ finalAllocations }),
   });
   return await handleResponse(response);
 };
@@ -441,14 +451,16 @@ export const getAllOrderDetailFills = async () => {
   return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
 };
 
+// DEPRECATED: These endpoints do not exist in the current backend.
+// Fill data is now part of OrderDetailResponse.
 export const getOrderDetailFillsByOrderDetailId = async (orderDetailId) => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-detail-fills/order-detail/${orderDetailId}`));
-  return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
+  console.warn('getOrderDetailFillsByOrderDetailId is deprecated. Use order.order_details.order_detail_fills instead.');
+  return [];
 };
 
 export const getOrderDetailFillsByBatchId = async (batchId) => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-detail-fills/batch/${batchId}`));
-  return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
+  console.warn('getOrderDetailFillsByBatchId is deprecated.');
+  return [];
 };
 
 // --- Receipts API ---
@@ -459,12 +471,8 @@ export const getReceiptsByOrderId = async (orderId) => {
 };
 
 export const getReceiptsByStatus = async (status) => {
-  // Since there is no /receipts endpoint that returns all receipts globally,
-  // we must get all orders, then fetch receipts for all relevant orders, and filter.
-  // This is a workaround. To be efficient, we might only fetch receipts for certain orders.
-  // However, for the Warehouse Outbound, we just need receipts for orders we are dealing with.
-  // We will change the component logic to simply filter its known receipts.
-  return []; // Placeholder. We will handle this in the component.
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/receipts/status/${status}`));
+  return Array.isArray(data) ? data.map(mapReceipt) : data;
 };
 
 /** Creates a DRAFT receipt for an order */
@@ -498,9 +506,9 @@ export const updateReceiptStatus = async (receiptIds, status) => {
   const response = await authFetch(`${API_BASE_URL}/receipts/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      receiptIds: Array.isArray(receiptIds) ? receiptIds : [receiptIds], 
-      status 
+    body: JSON.stringify({
+      receiptIds: Array.isArray(receiptIds) ? receiptIds : [receiptIds],
+      status
     }),
   });
   return await handleResponse(response);
@@ -640,7 +648,7 @@ export const createDelivery = async (deliveryData) => {
     orderIds: deliveryData.orderIds,
     deliveryDate: deliveryData.deliveryDate,
   };
-  const response = await authFetch(`${API_BASE_URL}/deliveries/create`, {
+  const response = await authFetch(`${API_BASE_URL}/deliveries`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -649,22 +657,13 @@ export const createDelivery = async (deliveryData) => {
   return data ? mapDelivery(data) : data;
 };
 
-/** PATCH /deliveries/{deliveryId}/start — Shipper starts trip → orders become DELIVERING */
-export const startDelivery = async (deliveryId) => {
-  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/start`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const data = await handleResponse(response);
-  return data ? mapDelivery(data) : data;
-};
-
-/** Update delivery status (WAITING, DELIVERING, DONE, CANCEL) */
+/** 
+ * Update delivery status (WAITING, DELIVERING, DONE, CANCEL)
+ * PATCH /deliveries/{deliveryId}/status?status=...
+ */
 export const updateDeliveryStatus = async (deliveryId, status) => {
-  const finalStatus = status;
-  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${finalStatus}`, {
+  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${status}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
   });
   return await handleResponse(response);
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDeliveries, getAllUsers, getAllStores, deleteDelivery, updateDeliveryStatus } from '../../data/api';
+import { getDeliveries, getAllUsers, getAllStores, deleteDelivery, updateDeliveryStatus, updateOrderStatus } from '../../data/api';
 import { toast } from '../../components/ui/sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -75,16 +75,20 @@ export default function Deliveries() {
     });
   };
 
-  const handleCancelDelivery = async (deliveryId) => {
-    if (!confirm('Bạn có chắc chắn muốn hủy chuyến giao hàng này? Toàn bộ đơn hàng sẽ được gỡ khỏi chuyến.')) return;
+  const handleCancelDelivery = async (delivery) => {
+    if (!confirm(`Bạn có chắc chắn muốn hủy chuyến giao hàng #${delivery.delivery_id}? Toàn bộ đơn hàng trong chuyến này cũng sẽ bị hủy.`)) return;
 
     try {
-      await updateDeliveryStatus(deliveryId, 'CANCELED');
-      toast.success('Đã hủy chuyến giao hàng thành công');
+      // Use the correct status 'CANCEL' as required by the API
+      await updateDeliveryStatus(delivery.delivery_id, 'CANCEL');
+
+      toast.success('Đã hủy chuyến và các đơn hàng thành công');
       fetchData(); // Refresh list
     } catch (error) {
+      console.error('Cancel error:', error);
       toast.error('Lỗi khi hủy chuyến: ' + error.message);
     }
+
   };
 
   const DeliveryCard = ({ delivery }) => (
@@ -110,16 +114,9 @@ export default function Deliveries() {
             variant="destructive"
             size="sm"
             className="mt-2"
-            onClick={async () => {
-              if (!window.confirm('Bạn có chắc muốn hủy chuyến này?')) return;
-              try {
-                await deleteDelivery(delivery.delivery_id);
-                toast.success('Đã hủy chuyến thành công!');
-                // Reload deliveries
-                fetchData();
-              } catch (e) {
-                toast.error(e.message || 'Hủy chuyến thất bại');
-              }
+            onClick={async (e) => {
+              e.stopPropagation();
+              handleCancelDelivery(delivery);
             }}
           >
             Hủy chuyến
@@ -151,21 +148,7 @@ export default function Deliveries() {
               </AccordionTrigger>
               <AccordionContent>
                 <div className="space-y-3 pt-2">
-                  {delivery.status === 'WAITING' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleCancelDelivery(delivery.delivery_id);
-                      }}
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Huỷ chuyến
-                    </Button>
-                  )}
-                  <div className="border-t pt-3 space-y-2">
+                  <div className="pt-3 space-y-2">
                     {(order.order_details || []).map((detail) => (
                       <div
                         key={detail.order_detail_id || detail.product_id}

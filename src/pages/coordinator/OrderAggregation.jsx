@@ -56,14 +56,22 @@ export default function OrderAggregation() {
     }).finally(() => setLoading(false));
   }, []);
 
-  const waitingOrders = orders
-    .filter((o) => o.status === 'DISPATCHED' && !o.delivery_id)
-    .sort((a, b) => b.order_id - a.order_id)
+  const allRelevantOrders = orders
+    .filter((o) => (o.status === 'DISPATCHED' || o.status === 'PROCESSING') && !o.delivery_id)
+    .sort((a, b) => {
+      // Priority to DISPATCHED
+      if (a.status === 'DISPATCHED' && b.status !== 'DISPATCHED') return -1;
+      if (a.status !== 'DISPATCHED' && b.status === 'DISPATCHED') return 1;
+      return b.order_id - a.order_id;
+    })
     .map((o) => ({
       ...o,
       store: stores.find((s) => s.store_id === o.store_id),
       details: (o.order_details || []).map((od) => ({ ...od })),
     }));
+  
+  const selectableOrders = allRelevantOrders.filter(o => o.status === 'DISPATCHED');
+  const previewOrders = allRelevantOrders.filter(o => o.status === 'PROCESSING');
 
   // shippers is already fetched directly from /users/shippers API
 
@@ -74,10 +82,10 @@ export default function OrderAggregation() {
   };
 
   const toggleAll = () => {
-    if (selectedOrders.length === waitingOrders.length) {
+    if (selectedOrders.length === selectableOrders.length) {
       setSelectedOrders([]);
     } else {
-      setSelectedOrders(waitingOrders.map((o) => o.order_id));
+      setSelectedOrders(selectableOrders.map((o) => o.order_id));
     }
   };
 
@@ -106,7 +114,7 @@ export default function OrderAggregation() {
     }
   };
 
-  const selectedOrdersData = waitingOrders.filter((o) => selectedOrders.includes(o.order_id));
+  const selectedOrdersData = selectableOrders.filter((o) => selectedOrders.includes(o.order_id));
   const groupedByStore = selectedOrdersData.reduce((acc, order) => {
     const storeId = order.store_id;
     if (!acc[storeId]) {
@@ -119,94 +127,135 @@ export default function OrderAggregation() {
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <p className="text-muted-foreground">Đang tải...</p>
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <p className="text-muted-foreground ml-2">Đang tải...</p>
       </div>
     );
   }
 
-  if (waitingOrders.length === 0) {
+  if (allRelevantOrders.length === 0) {
     return (
       <div className="p-6">
+        <h1 className="text-2xl font-bold mb-6">Gom đơn hàng</h1>
         <EmptyState
+          title="Không có đơn hàng nào"
+          description="Hiện không có đơn hàng nào đã được Warehouse xác nhận xuất kho để gom chuyến."
           icon={Package}
-          title="Không có đơn hàng chờ xử lý"
-          description="Tất cả đơn hàng đã được gom vào chuyến giao"
         />
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="p-6">
+      <div className="flex justify-between items-center mb-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Gom đơn hàng sẵn sàng</h1>
-          <p className="text-muted-foreground">Chọn các đơn hàng đã xuất kho (DISPATCHED) để tạo chuyến giao hàng</p>
+          <h1 className="text-2xl font-bold">Gom đơn hàng</h1>
+          <p className="text-muted-foreground">
+            Chỉ gom những đơn hàng đã được Warehouse xác nhận (DISPATCHED)
+          </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={toggleAll}>
-            {selectedOrders.length === waitingOrders.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
-          </Button>
+        <div className="flex gap-2">
+          {selectableOrders.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={toggleAll}
+            >
+              {selectedOrders.length === selectableOrders.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả sẵn sàng'}
+            </Button>
+          )}
           <Button
             onClick={() => setShowCreateDelivery(true)}
+            disabled={selectedOrders.length === 0}
+            className="gap-2"
           >
-            <Truck className="h-4 w-4 mr-2" />
-            Tạo chuyến ({selectedOrders.length})
+            <Truck className="h-4 w-4" />
+            Tạo chuyến xe ({selectedOrders.length})
           </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {waitingOrders.map((order) => {
-          const isSelected = selectedOrders.includes(order.order_id);
-          return (
-            <Card
-              key={order.order_id}
-              className={`cursor-pointer transition-all ${
-                isSelected ? 'ring-2 ring-primary bg-primary/5' : 'hover:bg-muted/50'
-              }`}
-              onClick={() => toggleOrder(order.order_id)}
-            >
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      checked={isSelected}
-                      onCheckedChange={() => toggleOrder(order.order_id)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                    <div>
-                      <CardTitle className="text-base">Đơn #{order.order_id}</CardTitle>
-                      <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
-                        <MapPin className="h-3 w-3" />
-                        {order.store?.store_name ?? order.store_name}
-                      </p>
+      <div className="grid gap-6">
+        {selectableOrders.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              Sẵn sàng giao ({selectableOrders.length})
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {selectableOrders.map((order) => (
+                <Card
+                  key={order.order_id}
+                  className={`cursor-pointer transition-all border-2 ${
+                    selectedOrders.includes(order.order_id)
+                      ? 'border-primary ring-1 ring-primary'
+                      : 'hover:border-muted-foreground/50'
+                  }`}
+                  onClick={() => toggleOrder(order.order_id)}
+                >
+                  <CardHeader className="pb-2">
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={selectedOrders.includes(order.order_id)}
+                          onCheckedChange={() => toggleOrder(order.order_id)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <CardTitle className="text-lg">Đơn #{order.order_id}</CardTitle>
+                      </div>
+                      <StatusBadge status={order.status} type="order" />
                     </div>
-                  </div>
-                  <StatusBadge status={order.status} type="order" />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-3">
-                  {order.store?.address}
-                </p>
-                <div className="space-y-2">
-                  {(order.details || []).map((detail) => (
-                    <div
-                      key={detail.order_detail_id || detail.product_id}
-                      className="flex items-center justify-between text-sm"
-                    >
-                      <span className="flex items-center gap-2">
-                        {detail.product_name || `SP #${detail.product_id}`}
-                      </span>
-                      <Badge variant="secondary">x{detail.quantity}</Badge>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      <div className="flex items-start gap-2 text-sm">
+                        <MapPin className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                        <div>
+                          <p className="font-medium">{order.store_name}</p>
+                          <p className="text-muted-foreground line-clamp-1">{order.store?.address}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Package className="h-4 w-4" />
+                        <span>{order.details.length} sản phẩm</span>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {previewOrders.length > 0 && (
+          <section>
+            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Đang chuẩn bị tại Warehouse ({previewOrders.length})
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 opacity-70">
+              {previewOrders.map((order) => (
+                <Card key={order.order_id} className="bg-muted/30">
+                  <CardHeader className="pb-2">
+                    <div className="flex justify-between items-start">
+                      <CardTitle className="text-lg text-muted-foreground">Đơn #{order.order_id}</CardTitle>
+                      <StatusBadge status={order.status} type="order" />
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2">
+                        <MapPin className="h-4 w-4" />
+                        <span>{order.store_name}</span>
+                      </div>
+                      <p className="italic">Đang chờ Warehouse xác nhận xuất kho...</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <Dialog open={showCreateDelivery} onOpenChange={setShowCreateDelivery}>
@@ -220,8 +269,8 @@ export default function OrderAggregation() {
               <Label>Đơn hàng đã chọn ({selectedOrders.length})</Label>
               <div className="max-h-40 overflow-y-auto space-y-2 p-3 bg-muted/50 rounded-lg">
                 {Object.values(groupedByStore).map(({ store, orders: ords }) => (
-                  <div key={store?.store_id} className="text-sm">
-                    <p className="font-medium">{store?.store_name}</p>
+                  <div key={store?.store_id || Math.random()} className="text-sm">
+                    <p className="font-medium">{store?.store_name || 'Cửa hàng không xác định'}</p>
                     <p className="text-muted-foreground text-xs">{store?.address}</p>
                     <p className="text-muted-foreground">{ords.length} đơn hàng</p>
                   </div>

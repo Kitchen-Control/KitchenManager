@@ -15,7 +15,7 @@ export const DELIVERY_STATUS = {
   WAITING: { label: 'Chờ giao', color: 'warning', class: 'status-waiting' },
   DELIVERING: { label: 'Đang giao', color: 'info', class: 'status-delivering' },
   DONE: { label: 'Hoàn thành', color: 'success', class: 'status-done' },
-  CANCELED: { label: 'Đã hủy', color: 'muted', class: 'status-cancelled' },
+  CANCEL: { label: 'Đã hủy', color: 'muted', class: 'status-cancelled' },
 };
 
 export const BATCH_STATUS = {
