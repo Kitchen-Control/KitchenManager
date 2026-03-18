@@ -63,6 +63,9 @@ function mapOrderDetail(od) {
     product_id: od.productId ?? od.product?.productId,
     product_name: od.productName ?? od.product?.productName,
     quantity: od.quantity,
+    price: od.price,
+    item_total_price: od.itemTotalPrice,
+    order_detail_fills: Array.isArray(od.orderDetailFills) ? od.orderDetailFills.map(mapOrderDetailFill) : [],
   };
 }
 
@@ -92,22 +95,28 @@ function mapDelivery(d) {
     created_at: d.createdAt,
     shipper_id: d.shipperId ?? d.shipper?.userId,
     shipper_name: d.shipperName ?? d.shipper?.fullName,
+    status: d.status,
     orders: Array.isArray(d.orders) ? d.orders.map(mapOrder) : [],
   };
 }
 
 function mapInventory(inv) {
   if (!inv) return null;
-  // InventoryResponse: { inventoryId, product_name, batch, quantity, expiryDate }
-  // product_name is directly on InventoryResponse (snake_case from backend)
   const batchObj = inv.batch;
+  // Deeply extract product_id from nested sources as backup
+  const productId = inv.productId ??
+    batchObj?.productId ??
+    batchObj?.product?.productId ??
+    inv.product_id ??
+    null;
+
   return {
     inventory_id: inv.inventoryId,
-    product_id: batchObj?.product?.productId ?? inv.productId ?? null,
-    product_name: inv.product_name ?? inv.productName ?? batchObj?.product?.productName ?? 'N/A',
+    product_id: productId,
+    product_name: inv.productName ?? inv.product_name ?? batchObj?.product?.productName ?? batchObj?.productName ?? 'N/A',
     batch: batchObj,
     batch_id: batchObj?.batchId ?? inv.batchId,
-    quantity: inv.quantity,
+    quantity: inv.quantity ?? 0,
     expiry_date: inv.expiryDate ?? inv.expiry_date,
   };
 }
@@ -383,14 +392,37 @@ export const createOrder = async (orderData) => {
   return data ? mapOrder(data) : data;
 };
 
-export const updateOrderStatus = async (orderId, status) => {
+export const updateOrderStatus = async (orderId, status, storeId = '0') => {
   const params = new URLSearchParams();
-  // Fixed: orderId should be in query as per OpenAPI search result previously seen or implied
   params.append('orderId', orderId);
-  params.append('status', status === 'CANCELLED' ? 'CANCLED' : status);
-  const response = await authFetch(`${API_BASE_URL}/orders/update-status/0?${params.toString()}`, { // storeId parameter is in Path /orders/update-status/{storeId}
+  params.append('status', status);
+  if (storeId) params.append('storeId', storeId); 
+  
+  // Spec: PATCH /orders/update-status/{storeId}
+  const response = await authFetch(`${API_BASE_URL}/orders/update-status/${storeId}?${params.toString()}`, {
     method: 'PATCH',
+  });
+  return await handleResponse(response);
+};
+
+// FEFO is handled automatically by backend when status moves to PROCESSING.
+// Call getFefoSuggestion to see the calculated batches.
+export const getFefoSuggestion = async (orderId) => {
+  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/allocation-suggestion`);
+  return await handleResponse(response);
+};
+
+/**
+ * Confirm batch allocation for an order
+ * POST /orders/{orderId}/confirm-allocation
+ * @param {number} orderId
+ * @param {Array<{ orderDetailId: number, batchPicks: Array<{batchId: number, quantity: number}> }>} finalAllocations
+ */
+export const confirmAllocation = async (orderId, finalAllocations) => {
+  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/confirm-allocation`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ finalAllocations }),
   });
   return await handleResponse(response);
 };
@@ -419,14 +451,16 @@ export const getAllOrderDetailFills = async () => {
   return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
 };
 
+// DEPRECATED: These endpoints do not exist in the current backend.
+// Fill data is now part of OrderDetailResponse.
 export const getOrderDetailFillsByOrderDetailId = async (orderDetailId) => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-detail-fills/order-detail/${orderDetailId}`));
-  return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
+  console.warn('getOrderDetailFillsByOrderDetailId is deprecated. Use order.order_details.order_detail_fills instead.');
+  return [];
 };
 
 export const getOrderDetailFillsByBatchId = async (batchId) => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-detail-fills/batch/${batchId}`));
-  return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
+  console.warn('getOrderDetailFillsByBatchId is deprecated.');
+  return [];
 };
 
 // --- Receipts API ---
@@ -437,12 +471,8 @@ export const getReceiptsByOrderId = async (orderId) => {
 };
 
 export const getReceiptsByStatus = async (status) => {
-  // Since there is no /receipts endpoint that returns all receipts globally,
-  // we must get all orders, then fetch receipts for all relevant orders, and filter.
-  // This is a workaround. To be efficient, we might only fetch receipts for certain orders.
-  // However, for the Warehouse Outbound, we just need receipts for orders we are dealing with.
-  // We will change the component logic to simply filter its known receipts.
-  return []; // Placeholder. We will handle this in the component.
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/receipts/status/${status}`));
+  return Array.isArray(data) ? data.map(mapReceipt) : data;
 };
 
 /** Creates a DRAFT receipt for an order */
@@ -468,6 +498,21 @@ export const confirmReceipts = async (receiptIds) => {
 
 // Keep compatibility for single ID calls
 export const confirmReceipt = (receiptId) => confirmReceipts([receiptId]);
+
+/** Update receipt status (DRAFT, COMPLETED, CANCELED) 
+ * PATCH /receipts/status - body: { receiptIds: [], status: string }
+ */
+export const updateReceiptStatus = async (receiptIds, status) => {
+  const response = await authFetch(`${API_BASE_URL}/receipts/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receiptIds: Array.isArray(receiptIds) ? receiptIds : [receiptIds],
+      status
+    }),
+  });
+  return await handleResponse(response);
+};
 
 
 
@@ -603,7 +648,7 @@ export const createDelivery = async (deliveryData) => {
     orderIds: deliveryData.orderIds,
     deliveryDate: deliveryData.deliveryDate,
   };
-  const response = await authFetch(`${API_BASE_URL}/deliveries/create`, {
+  const response = await authFetch(`${API_BASE_URL}/deliveries`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -612,14 +657,15 @@ export const createDelivery = async (deliveryData) => {
   return data ? mapDelivery(data) : data;
 };
 
-/** PATCH /deliveries/{deliveryId}/start — Shipper starts trip → orders become DELIVERING */
-export const startDelivery = async (deliveryId) => {
-  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/start`, {
+/** 
+ * Update delivery status (WAITING, DELIVERING, DONE, CANCEL)
+ * PATCH /deliveries/{deliveryId}/status?status=...
+ */
+export const updateDeliveryStatus = async (deliveryId, status) => {
+  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${status}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
   });
-  const data = await handleResponse(response);
-  return data ? mapDelivery(data) : data;
+  return await handleResponse(response);
 };
 
 export const deleteDelivery = async (id) => {
@@ -695,7 +741,8 @@ export const getLogBatchesByProductId = async (productId) => {
  * PATCH /log-batches/{batchId}/status?status=...
  */
 export const updateLogBatchStatus = async (batchId, status) => {
-  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${status}`, {
+  const finalStatus = status;
+  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${finalStatus}`, {
     method: 'PATCH',
   });
   const data = await handleResponse(response);
@@ -716,13 +763,19 @@ export const getLogBatchesByStatus = async (status) => {
  * POST /log-batches/production
  */
 export const createProLogBatch = async (batchData) => {
+  // Ensure we send an array of cleaned objects
+  const payload = Array.isArray(batchData) ? batchData : [batchData];
+  const cleanedPayload = payload.map(item => {
+    const { expiryDate, ...rest } = item;
+    return item.expiryDate ? item : rest;
+  });
+
   const response = await authFetch(`${API_BASE_URL}/log-batches/production`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(batchData),
+    body: JSON.stringify(cleanedPayload),
   });
-  const data = await handleResponse(response);
-  return mapLogBatch(data);
+  return await handleResponse(response);
 };
 
 /**
@@ -751,8 +804,18 @@ export const getProductionPlans = async () => {
 };
 
 export const createProductionPlan = async (planData) => {
+  const payload = { ...planData, status: planData.status || 'DRAFT' };
   const response = await authFetch(`${API_BASE_URL}/production-plans`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await handleResponse(response);
+};
+
+export const updateProductionPlan = async (planId, planData) => {
+  const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}`, {
+    method: 'PUT', // Swagger shows PUT for full update
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(planData),
   });
@@ -760,10 +823,7 @@ export const createProductionPlan = async (planData) => {
 };
 
 export const updateProductionPlanStatus = async (planId, status) => {
-  const params = new URLSearchParams();
-  params.append('planId', planId);
-  params.append('status', status);
-  const response = await authFetch(`${API_BASE_URL}/production-plans/update-status?${params.toString()}`, {
+  const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}/status?status=${status}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
   });

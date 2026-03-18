@@ -82,7 +82,7 @@ export const AuthProvider = ({ children }) => {
     // Nếu chưa đăng nhập thì không cần chạy logic này
     if (!user) return;
 
-    const INACTIVITY_LIMIT = 5 * 60 * 1000; // 5 phút (tính bằng mili giây)
+    const INACTIVITY_LIMIT = 30 * 60 * 1000; // 5 phút (tính bằng mili giây)
     let timeoutId;
 
     const resetTimer = () => {

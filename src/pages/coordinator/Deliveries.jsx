@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDeliveries, getAllUsers, getAllStores, deleteDelivery } from '../../data/api';
+import { getDeliveries, getAllUsers, getAllStores, deleteDelivery, updateDeliveryStatus, updateOrderStatus } from '../../data/api';
 import { toast } from '../../components/ui/sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -14,6 +14,7 @@ import {
   Calendar,
   Package,
   Phone,
+  XCircle,
 } from 'lucide-react';
 import {
   Accordion,
@@ -26,11 +27,15 @@ export default function Deliveries() {
   const [deliveries, setDeliveries] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const fetchData = () => {
     getDeliveries()
       .then((data) => setDeliveries(Array.isArray(data) ? data : []))
       .catch(() => setDeliveries([]))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchData();
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
@@ -38,9 +43,8 @@ export default function Deliveries() {
     const hasWaiting = delivery.orders.some(o => o.status === 'WAITING');
     const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
     const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
-    const allDone = delivery.orders.every(o => o.status === 'DONE');
-
-    if (allDone) return 'DONE';
+    const allFinished = delivery.orders.every(o => ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(o.status));
+    if (allFinished) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
     if (hasProcessing) return 'PROCESSING';
     return 'WAITING';
@@ -71,6 +75,22 @@ export default function Deliveries() {
     });
   };
 
+  const handleCancelDelivery = async (delivery) => {
+    if (!confirm(`Bạn có chắc chắn muốn hủy chuyến giao hàng #${delivery.delivery_id}? Toàn bộ đơn hàng trong chuyến này cũng sẽ bị hủy.`)) return;
+
+    try {
+      // Use the correct status 'CANCEL' as required by the API
+      await updateDeliveryStatus(delivery.delivery_id, 'CANCEL');
+
+      toast.success('Đã hủy chuyến và các đơn hàng thành công');
+      fetchData(); // Refresh list
+    } catch (error) {
+      console.error('Cancel error:', error);
+      toast.error('Lỗi khi hủy chuyến: ' + error.message);
+    }
+
+  };
+
   const DeliveryCard = ({ delivery }) => (
     <Card>
       <CardHeader className="pb-2">
@@ -94,17 +114,9 @@ export default function Deliveries() {
             variant="destructive"
             size="sm"
             className="mt-2"
-            onClick={async () => {
-              if (!window.confirm('Bạn có chắc muốn hủy chuyến này?')) return;
-              try {
-                await deleteDelivery(delivery.delivery_id);
-                toast.success('Đã hủy chuyến thành công!');
-                // Reload deliveries
-                getDeliveries()
-                  .then((data) => setDeliveries(Array.isArray(data) ? data : []));
-              } catch (e) {
-                toast.error(e.message || 'Hủy chuyến thất bại');
-              }
+            onClick={async (e) => {
+              e.stopPropagation();
+              handleCancelDelivery(delivery);
             }}
           >
             Hủy chuyến
@@ -136,7 +148,7 @@ export default function Deliveries() {
               </AccordionTrigger>
               <AccordionContent>
                 <div className="space-y-3 pt-2">
-                  <div className="border-t pt-3 space-y-2">
+                  <div className="pt-3 space-y-2">
                     {(order.order_details || []).map((detail) => (
                       <div
                         key={detail.order_detail_id || detail.product_id}

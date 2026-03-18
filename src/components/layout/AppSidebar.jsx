@@ -96,7 +96,7 @@ const kitchenExecutionMenu = [
   { title: 'Thực thi Sản xuất', url: '/kitchen/production', icon: ChefHat },
   { title: 'Chờ xác nhận', url: '/kitchen/batches/WAITING_TO_CONFIRM', icon: AlertTriangle },
   { title: 'Đang sản xuất', url: '/kitchen/batches/PROCESSING', icon: Timer },
-  { title: 'Chờ huỷ hàng', url: '/kitchen/batches/WAITING_TO_CANCLE', icon: FileWarning },
+  { title: 'Chờ huỷ hàng', url: '/kitchen/batches/WAITING_TO_CANCEL', icon: FileWarning },
 ];
 
 const kitchenBatchManagementMenu = [

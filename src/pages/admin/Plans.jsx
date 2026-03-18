@@ -97,7 +97,7 @@ export default function Plans() {
           const currentPlanId = Number(plan.planId || plan.plan_id);
           const planBatches = batches.filter(b => Number(b.plan_id || b.planId) === currentPlanId);
 
-          const terminalStatuses = ['DONE', 'DAMAGED', 'CANCLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCLE'];
+          const terminalStatuses = ['DONE', 'DAMAGED', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
 
           const allBatchesFinished = planBatches.length > 0 && planBatches.every(b => {
             const s = String(b.status || '').toUpperCase();

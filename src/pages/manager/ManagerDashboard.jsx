@@ -47,7 +47,7 @@ export default function ManagerDashboard() {
   // Note: pendingImportBatches cần API Production Batches từ backend
   // Hiện tại để [], khi backend bổ sung API sẽ thay thế bằng dữ liệu thật
   const pendingImportBatches = [];
-  const finishedProducts = products.filter((p) => p.product_type === 'FINISHED_PRODUCT');
+  const finishedProducts = products.filter((p) => p.product_type !== 'RAW_MATERIAL');
 
   const handleImportBatch = () => {
     toast.info('Chức năng nhập kho từ lô sản xuất cần API Production Batches.');

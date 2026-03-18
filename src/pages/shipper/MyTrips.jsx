@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getDeliveriesByShipperId, startDelivery, completeOrder, updateOrderStatus, getReceiptsByOrderId } from '../../data/api';
+import { getDeliveriesByShipperId, updateDeliveryStatus, completeOrder, updateOrderStatus, getReceiptsByOrderId } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -70,7 +70,7 @@ export default function MyTrips() {
   const getDeliveryStatus = (delivery) => {
     const orders = delivery.orders || [];
     if (orders.length === 0) return 'WAITING';
-    if (orders.every(o => o.status === 'DONE' || o.status === 'DAMAGED' || o.status === 'CANCLED')) return 'DONE';
+    if (orders.every(o => o.status === 'DONE' || o.status === 'DAMAGED' || o.status === 'CANCELED' || o.status === 'PARTIAL_DELIVERED')) return 'DONE';
     if (orders.some(o => o.status === 'DELIVERING')) return 'DELIVERING';
     return 'WAITING';
   };
@@ -90,7 +90,15 @@ export default function MyTrips() {
         return;
       }
 
-      await startDelivery(deliveryId);
+      // 1. Update delivery status to DELIVERING using the correct API
+      await updateDeliveryStatus(deliveryId, 'DELIVERING');
+      
+      // 2. Also update all orders in this delivery to DELIVERING status
+      // to ensure consistency across the app for shippers and customers.
+      await Promise.all(orders.map(o => 
+        updateOrderStatus(o.order_id, 'DELIVERING', o.store_id || '0').catch(e => console.error(e))
+      ));
+
       toast.success('Đã bắt đầu chuyến giao hàng!');
       reloadData();
     } catch (error) {
@@ -111,7 +119,7 @@ export default function MyTrips() {
         toast.success(`Đã giao thành công đơn hàng #${selectedOrder.order_id}`);
       } else {
         // DAMAGED — dùng updateOrderStatus
-        await updateOrderStatus(selectedOrder.order_id, 'DAMAGED');
+        await updateOrderStatus(selectedOrder.order_id, 'DAMAGED', selectedOrder.store_id);
         toast.warning(`Đã báo cáo đơn hàng #${selectedOrder.order_id} bị hư hỏng`);
       }
       setShowCompleteDialog(false);

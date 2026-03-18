@@ -66,9 +66,9 @@ export default function OrderHistory() {
   const handleCancelOrder = async () => {
     if (!cancelOrder) return;
     try {
-      await updateOrderStatus(cancelOrder.order_id, 'CANCLED');
+      await updateOrderStatus(cancelOrder.order_id, 'CANCELED', cancelOrder.store_id);
       setOrders((prev) =>
-        prev.map((o) => (o.order_id === cancelOrder.order_id ? { ...o, status: 'CANCLED' } : o))
+        prev.map((o) => (o.order_id === cancelOrder.order_id ? { ...o, status: 'CANCELED' } : o))
       );
       toast.success('Đơn hàng đã được hủy thành công');
       reloadDashboard();
