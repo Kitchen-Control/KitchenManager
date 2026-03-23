@@ -54,7 +54,8 @@ import WarehouseProcurement from "./pages/warehouse/Procurement";
 import WarehouseWaste from "./pages/warehouse/Waste";
 import WarehouseReports from "./pages/warehouse/Reports";
 import InventoryHistory from "./pages/warehouse/InventoryHistory";
-
+import Inpound from "./pages/warehouse/Inbound";
+import MaterialAllocation from "./pages/warehouse/MaterialAllocationPage";
 const queryClient = new QueryClient();
 
 // Placeholder component for pages not yet implemented
@@ -122,10 +123,11 @@ const App = () => (
                   <Route path="inventory" element={<WarehouseInventory />} />
                   <Route path="inventory-history" element={<InventoryHistory />} />
                   <Route path="procurement" element={<WarehouseProcurement />} />
-                  <Route path="inbound" element={<BatchLog status="WAITING_TO_CONFIRM" />} />
+                  <Route path="inbound" element={<Inpound status="WAITING_TO_CONFIRM" />} />
                   <Route path="outbound" element={<WarehouseOutbound />} />
                   <Route path="waste" element={<WarehouseWaste />} />
                   <Route path="reports" element={<WarehouseReports />} />
+                  <Route path="material-allocation" element={<MaterialAllocation />} />
                 </Route>
 
                 {/* Admin routes */}

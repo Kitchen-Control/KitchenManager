@@ -308,7 +308,7 @@ export default function ProductionPlanning() {
                             <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleEdit(plan); }}>
                               Sửa chi tiết
                             </Button>
-                            <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleStatusUpdate(plan.planId, 'CANCELLED'); }}>
+                            <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50" onClick={(e) => { e.stopPropagation(); handleStatusUpdate(plan.planId, 'CANCEL'); }}>
                               Hủy kế hoạch
                             </Button>
                             <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white font-bold" onClick={(e) => { e.stopPropagation(); handleStatusUpdate(plan.planId, 'WAITING'); }}>

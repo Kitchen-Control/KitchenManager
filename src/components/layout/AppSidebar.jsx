@@ -88,6 +88,7 @@ const menuByRole = {
     { title: 'Nhập mua Nguyên liệu', url: '/warehouse/procurement', icon: ShoppingCart },
     { title: 'Nhập kho Thành phẩm', url: '/warehouse/inbound', icon: ArrowDownToLine },
     { title: 'Xuất kho', url: '/warehouse/outbound', icon: Truck },
+    { title: 'Phân bổ Nguyên liệu', url: '/warehouse/material-allocation', icon: Warehouse },
     { title: 'Hủy hàng', url: '/warehouse/waste', icon: FileWarning },
   ],
 };
