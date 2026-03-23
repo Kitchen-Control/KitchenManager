@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Loader2, PackageCheck, ClipboardList, CheckCircle2, Package, RefreshCw, Truck, MapPin, Search, ChevronDown, ChevronUp } from 'lucide-react';
-import { getOrdersByStatus, getReceiptsByStatus, createReceipt, updateReceiptStatus, updateOrderStatus, completeOrder, getFefoSuggestion, confirmAllocation, getInventories } from '../../data/api';
+import { fetchOrders, getOrdersByStatus, getReceiptsByStatus, getReceiptsByOrderId, createReceipt, updateReceiptStatus, updateOrderStatus, getFefoSuggestion, confirmAllocation, getInventories, getOrderById } from '../../data/api';
 import { toast } from 'sonner';
 
 export default function WarehouseOutbound() {
@@ -20,6 +20,7 @@ export default function WarehouseOutbound() {
   const [processingOrderId, setProcessingOrderId] = useState(null);
   const [checkedOrders, setCheckedOrders] = useState({}); // { orderId: boolean }
   const [inventories, setInventories] = useState([]);
+  const [orderDetailsCache, setOrderDetailsCache] = useState({}); // { orderId: order_details[] }
   
   // Allocation Modal State
   const [allocationModal, setAllocationModal] = useState({
@@ -35,53 +36,45 @@ export default function WarehouseOutbound() {
     setIsLoading(true);
     setCheckedOrders({});
     try {
-      // 1. Fetch all orders by status in parallel
-      const [pOrders, wOrders, dispOrders, delOrders, doneOrders, damagedOrders, canceledOrders, invData] = await Promise.all([
-        getOrdersByStatus('PROCESSING').catch(() => []),
-        getOrdersByStatus('WAITING').catch(() => []),
-        getOrdersByStatus('DISPATCHED').catch(() => []),
-        getOrdersByStatus('DELIVERING').catch(() => []),
-        getOrdersByStatus('DONE').catch(() => []),
-        getOrdersByStatus('DAMAGED').catch(() => []),
-        getOrdersByStatus('CANCELED').catch(() => []), // Fixed typo
+      // 1. Fetch all orders and inventories
+      const [allFetchedOrders, invData] = await Promise.all([
+        fetchOrders().catch(() => []),
         getInventories().catch(() => []),
       ]);
       
       setInventories(invData || []);
 
-      // 2. Combine and De-duplicate orders by ID
-      // Order of addition matters: WAITING first, then others will OVERWRITE it if same ID exists
-      const allFetchedOrders = [
-        ...canceledOrders,
-        ...damagedOrders,
-        ...doneOrders,
-        ...delOrders,
-        ...wOrders,
-        ...pOrders,
-        ...dispOrders
-      ];
+      // 2. De-duplicate orders by ID
       const uniqueOrdersMap = new Map();
-      allFetchedOrders.forEach(o => {
-        if (o && o.order_id) {
-          uniqueOrdersMap.set(o.order_id, o);
-        }
+      (allFetchedOrders || []).forEach(o => {
+        if (o && o.order_id) uniqueOrdersMap.set(o.order_id, o);
       });
       const relevantOrders = Array.from(uniqueOrdersMap.values()).sort((a, b) => b.order_id - a.order_id);
       setAllOrders(relevantOrders);
 
-      // 3. Fetch receipts in BULK by status instead of N parallel calls
-      const [draftReceipts, completedReceipts] = await Promise.all([
-        getReceiptsByStatus('DRAFT').catch(() => []),
-        getReceiptsByStatus('COMPLETED').catch(() => []),
-      ]);
+      // 3. Fetch receipts per relevant order (to avoid failing /status/DRAFT endpoint)
+      console.log(`Mapping receipts for ${relevantOrders.length} orders...`);
+      const receiptsPerOrder = await Promise.all(
+        relevantOrders
+          .filter(o => ['WAITING', 'PROCESSING', 'PICKING', 'PARTIAL_DELIVERED', 'DISPATCHED', 'DELIVERING'].includes(o.status))
+          .map(async (o) => {
+            try {
+              const res = await getReceiptsByOrderId(o.order_id);
+              const receipts = Array.isArray(res) ? res : [];
+              if (receipts.length > 0) {
+                console.log(`Order #${o.order_id} has ${receipts.length} receipts`);
+              }
+              return { orderId: o.order_id, receipts };
+            } catch (e) {
+              console.warn(`Error fetching receipts for order #${o.order_id}:`, e.message);
+              return { orderId: o.order_id, receipts: [] };
+            }
+          })
+      );
 
       const newOrderReceipts = {};
-      const allRelevantReceipts = [...draftReceipts, ...completedReceipts];
-      allRelevantReceipts.forEach(r => {
-        if (r.order_id) {
-          if (!newOrderReceipts[r.order_id]) newOrderReceipts[r.order_id] = [];
-          newOrderReceipts[r.order_id].push(r);
-        }
+      receiptsPerOrder.forEach(({ orderId, receipts }) => {
+        if (orderId) newOrderReceipts[orderId] = receipts;
       });
       setOrderReceipts(newOrderReceipts);
 
@@ -107,21 +100,47 @@ export default function WarehouseOutbound() {
     fetchData();
   }, [fetchData]);
 
-  const toggleOrderDetails = (order) => {
+  const toggleOrderDetails = async (order) => {
     if (expandedOrder === order.order_id) {
       setExpandedOrder(null);
     } else {
       setExpandedOrder(order.order_id);
+      // Lazy-load order details if not already loaded or empty from list API
+      const cached = orderDetailsCache[order.order_id];
+      const hasDetails = (order.order_details || []).length > 0;
+      if (!hasDetails && !cached) {
+        try {
+          const fullOrder = await getOrderById(order.order_id);
+          if (fullOrder) {
+            setOrderDetailsCache(prev => ({
+              ...prev,
+              [order.order_id]: fullOrder.order_details || []
+            }));
+          }
+        } catch (e) {
+          console.error('Lỗi tải chi tiết đơn:', e);
+        }
+      }
     }
   };
 
   const handleCreateReceipt = async (order) => {
-    if (!confirm(`Tạo Phiếu Xuất Kho cho đơn hàng #${order.order_id}?`)) return;
+    if (!confirm(`Tạo Phiếu Xuất Kho cho đơn hàng #${order.order_id}?\nPhiếu sẽ ở trạng thái DRAFT (Đang soạn).`)) return;
     setProcessingOrderId(order.order_id);
     try {
       const receipt = await createReceipt(order.order_id, `Phiếu xuất cho đơn #${order.order_id}`);
-      toast.success(`Đã tạo Phiếu Xuất #${receipt?.receipt_id || ''} (DRAFT)`);
-      await fetchData(); // Refresh entirely to move items properly
+      
+      // Update local state immediately for SNAPPY UI
+      if (receipt) {
+        setOrderReceipts(prev => ({
+          ...prev,
+          [order.order_id]: [...(prev[order.order_id] || []), receipt]
+        }));
+      }
+
+      toast.success(`Đã tạo Phiếu Xuất #${receipt?.receipt_id || ''} dạng DRAFT.`);
+      await fetchData(); 
+      setActiveTab('draft'); // Move to Tab 3 automatically
     } catch (error) {
       toast.error('Lỗi tạo phiếu xuất: ' + error.message);
     } finally {
@@ -129,13 +148,14 @@ export default function WarehouseOutbound() {
     }
   };
 
-  const handleConfirmReceipt = async (order, receipt) => {
-    if (!confirm(`Xác nhận Hoàn tất Xuất kho cho Phiếu #${receipt.receipt_id}?\nHành động này sẽ cập nhật trạng thái phiếu và trừ kho.`)) return;
-    setProcessingOrderId(order.order_id);
+  const handleConfirmReceipt = async (receipt) => {
+    if (!confirm(`Xác nhận xuất kho cho Phiếu #${receipt.receipt_id}?\nHành động này sẽ trừ tồn kho thực tế.`)) return;
+    setProcessingOrderId(`receipt-${receipt.receipt_id}`);
     try {
       await updateReceiptStatus(receipt.receipt_id, 'COMPLETED');
-      toast.success('Xác nhận xuất kho thành công!');
+      toast.success(`Đã xác nhận xuất kho cho Phiếu #${receipt.receipt_id}!`);
       await fetchData();
+      setActiveTab('dispatched'); // Move to Tab 4 automatically
     } catch (error) {
       toast.error('Lỗi xác nhận xuất kho: ' + error.message);
     } finally {
@@ -143,53 +163,45 @@ export default function WarehouseOutbound() {
     }
   };
 
-  const handleConfirmReceipts = async () => {
-    const selectedIds = Object.keys(checkedOrders)
-      .filter(id => checkedOrders[id])
-      .map(id => {
-        const r = (orderReceipts[id] || []).find(receipt => receipt.status === 'DRAFT');
-        return r ? r.receipt_id : null;
-      })
-      .filter(Boolean);
-
-    if (selectedIds.length === 0) {
-      toast.error('Vui lòng chọn ít nhất một đơn có Phiếu Draft');
-      return;
-    }
-
-    if (!confirm(`Xác nhận Xuất kho cho ${selectedIds.length} phiếu đã chọn?`)) return;
-
-    setIsLoading(true);
+  const handleCancelReceipt = async (receipt) => {
+    if (!confirm(`Hủy Phiếu Xuất #${receipt.receipt_id}?`)) return;
+    setProcessingOrderId(`receipt-${receipt.receipt_id}`);
     try {
-      await updateReceiptStatus(selectedIds, 'COMPLETED');
-      toast.success(`Đã xác nhận xuất kho thành công cho ${selectedIds.length} đơn.`);
-      setCheckedOrders({});
+      await updateReceiptStatus(receipt.receipt_id, 'CANCELED');
+      toast.success('Đã hủy phiếu xuất.');
       await fetchData();
     } catch (error) {
-      toast.error('Lỗi xác nhận xuất kho hàng loạt: ' + error.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDispatchOrder = async (order) => {
-    if (!confirm(`Đánh dấu đơn hàng #${order.order_id} SẴN SÀNG BÀN GIAO?\nShipper sẽ thấy đơn hàng này để Nhận và Giao.`)) return;
-    setProcessingOrderId(order.order_id);
-    try {
-      await updateOrderStatus(order.order_id, 'DISPATCHED', order.store_id);
-      toast.success('Đơn hàng đã sẵn sàng bàn giao cho Shipper.');
-      await fetchData();
-    } catch (error) {
-      toast.error('Lỗi cập nhật: ' + error.message);
+      toast.error('Lỗi hủy phiếu: ' + error.message);
     } finally {
       setProcessingOrderId(null);
     }
   };
 
   const handleOpenAllocation = async (order) => {
+    // Enrich order with cached or lazy-fetched details before opening modal
+    let enrichedOrder = {
+      ...order,
+      order_details: (order.order_details || []).length > 0
+        ? order.order_details
+        : (orderDetailsCache[order.order_id] || [])
+    };
+
+    // If still empty, fetch now
+    if (enrichedOrder.order_details.length === 0) {
+      try {
+        const fullOrder = await getOrderById(order.order_id);
+        if (fullOrder) {
+          enrichedOrder = { ...order, order_details: fullOrder.order_details || [] };
+          setOrderDetailsCache(prev => ({ ...prev, [order.order_id]: fullOrder.order_details || [] }));
+        }
+      } catch (e) {
+        console.error('Lỗi tải chi tiết đơn:', e);
+      }
+    }
+
     setAllocationModal({
       isOpen: true,
-      order,
+      order: enrichedOrder,
       suggestions: [],
       manualAllocations: {},
       isLoading: true,
@@ -256,6 +268,9 @@ export default function WarehouseOutbound() {
     setAllocationModal(prev => ({ ...prev, isSubmitting: true }));
     try {
       await confirmAllocation(order.order_id, finalAllocations);
+      // Flow 1 Step 2: DUYỆT ĐƠN -> confirmAllocation implicitly moves it to PROCESSING
+      // We no longer call updateOrderStatus here to avoid 500 status conflicts/locks
+      
       toast.success('Duyệt đơn và phân bổ hàng thành công!');
       setAllocationModal(prev => ({ ...prev, isOpen: false }));
       await fetchData();
@@ -286,6 +301,8 @@ export default function WarehouseOutbound() {
     
     setProcessingOrderId(order.order_id);
     try {
+      // Flow 1 Step 2: Trường hợp B - Từ chối đơn -> Update orders.status: WAITING -> CANCELED
+      // Optionally attach 'reason' as comment if backend allows
       await updateOrderStatus(order.order_id, 'CANCELED', order.store_id);
       toast.success('Đã từ chối đơn hàng');
       await fetchData();
@@ -296,60 +313,47 @@ export default function WarehouseOutbound() {
     }
   };
 
-  const handleCompleteOrder = async (order) => {
-    if (!confirm(`Xác nhận HOÀN TẤT XUẤT KHO cho đơn #${order.order_id}?\nĐơn hàng sẽ được chuyển vào mục Lịch sử.`)) return;
-    setProcessingOrderId(order.order_id);
-    try {
-      await completeOrder(order.order_id);
-      toast.success('Xuất kho hoàn tất thành công!');
-      await fetchData();
-    } catch (error) {
-      toast.error('Lỗi hoàn tất xuất kho: ' + error.message);
-    } finally {
-      setProcessingOrderId(null);
-    }
-  };
-
   const toggleOrderChecked = (e, orderId) => {
     e.stopPropagation();
     setCheckedOrders(prev => ({ ...prev, [orderId]: !prev[orderId] }));
   };
 
-  const handleToggleSelectAll = () => {
-    const allSelected = draftOrders.length > 0 && draftOrders.every(o => !!checkedOrders[o.order_id]);
-    const newChecked = { ...checkedOrders };
-    draftOrders.forEach(o => {
-      newChecked[o.order_id] = !allSelected;
-    });
-    setCheckedOrders(newChecked);
-  };
-
   const getDisplayStatusText = (status, actionType) => {
     if (actionType === 'picking') return 'PROCESSING';
     if (actionType === 'draft') return 'DRAFT';
-    if (actionType === 'completed') return 'COMPLETED';
-    if (actionType === 'dispatched') {
-      return status;
-    }
+    if (actionType === 'ready') return 'COMPLETED';
+    if (actionType === 'completed') return 'DELIVERED/DONE';
     return status;
   };
 
-  // derived data
+  // 1. Duyệt đơn: Only WAITING
   const waitingConfirmationOrders = allOrders.filter(o => o.status === 'WAITING');
 
-  const pickingOrders = allOrders.filter(o =>
-    o.status === 'PROCESSING' &&
-    (!orderReceipts[o.order_id] || !orderReceipts[o.order_id].some(r => r.status === 'DRAFT'))
-  );
+  // 2. Soạn hàng: PROCESSING but NO DRAFT receipts and NO COMPLETED receipts
+  // (We want them to stay here until they have a receipt being worked on)
+  const pickingOrders = allOrders.filter(o => {
+    // Include PICKING status explicitly as mentioned by the user
+    if (o.status !== 'PROCESSING' && o.status !== 'PARTIAL_DELIVERED' && o.status !== 'PICKING') return false;
+    const receipts = orderReceipts[o.order_id] || [];
+    // If it has a DRAFT or COMPLETED receipt, it moves to the next stages
+    return !receipts.some(r => r.status === 'DRAFT' || r.status === 'COMPLETED');
+  });
 
-  const draftOrders = allOrders.filter(o =>
-    (orderReceipts[o.order_id] || []).some(r => r.status === 'DRAFT')
-  );
+  // 3. Phiếu tạm: PROCESSING and HAS at least one DRAFT receipt
+  const draftReceiptOrders = allOrders.filter(o => {
+    const receipts = orderReceipts[o.order_id] || [];
+    return receipts.some(r => r.status === 'DRAFT');
+  });
 
-  const dispatchedOrders = allOrders.filter(o =>
-    o.status === 'DISPATCHED' ||
-    (orderReceipts[o.order_id] || []).some(r => r.status === 'COMPLETED')
-  );
+  // 4. Xuất kho: HAS at least one COMPLETED receipt
+  // or is already further in the flow
+  const readyOrDoneOrders = allOrders.filter(o => {
+    const receipts = orderReceipts[o.order_id] || [];
+    const hasCompleted = receipts.some(r => r.status === 'COMPLETED');
+    
+    // We show it in 'Xuất kho' if it has completed (exported) receipts. 
+    return hasCompleted || o.status === 'DISPATCHED' || o.status === 'DELIVERING' || o.status === 'DONE';
+  });
 
   const renderOrderList = (orders, actionType) => {
     if (orders.length === 0) {
@@ -372,17 +376,6 @@ export default function WarehouseOutbound() {
               <CardHeader className="pb-3 cursor-pointer hover:bg-slate-50" onClick={() => toggleOrderDetails(order)}>
                 <div className="flex justify-between items-start">
                   <div className="flex items-start gap-3">
-                    {actionType === 'draft' && (
-                      <div className="pt-1">
-                        <input
-                          type="checkbox"
-                          className="w-5 h-5 accent-yellow-600 rounded cursor-pointer"
-                          checked={!!checkedOrders[order.order_id]}
-                          onChange={(e) => toggleOrderChecked(e, order.order_id)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                    )}
                     <div>
                       <CardTitle className="text-base flex items-center gap-2">
                         Đơn hàng #{order.order_id}
@@ -396,11 +389,21 @@ export default function WarehouseOutbound() {
                 </div>
               </CardHeader>
 
-              {isExpanded && (
+               {isExpanded && (
                 <CardContent className="space-y-4 animate-in fade-in slide-in-from-top-1">
                   <div className="space-y-2 bg-gray-50/50 p-3 rounded border">
                     <p className="font-semibold text-sm mb-2">{actionType === 'picking' ? 'Danh mục gắp hàng (Picking Guide):' : 'Chi tiết sản phẩm:'}</p>
-                    {(order.order_details || []).map(detail => {
+                    {(() => {
+                      // Use cache if order.order_details is empty (list API may omit them)
+                      const effectiveDetails = (order.order_details || []).length > 0
+                        ? order.order_details
+                        : (orderDetailsCache[order.order_id] || []);
+                      
+                      if (effectiveDetails.length === 0) {
+                        return <p className="text-sm text-muted-foreground italic">Đang tải sản phẩm...</p>;
+                      }
+                      
+                      return effectiveDetails.map(detail => {
                       const fills = orderFills[detail.order_detail_id] || [];
                       return (
                         <div key={detail.order_detail_id} className="border-b pb-2 mb-2 last:border-0 last:pb-0 last:mb-0">
@@ -424,12 +427,12 @@ export default function WarehouseOutbound() {
                           )}
                         </div>
                       );
-                    })}
+                      });})()}
                   </div>
 
                   <div className="pt-2">
                     {actionType === 'waiting' && (
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 mt-4">
                         <Button onClick={(e) => { e.stopPropagation(); handleOpenAllocation(order); }} disabled={isProcessing} className="flex-1 bg-green-600 hover:bg-green-700">
                           {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
                           Duyệt đơn
@@ -440,24 +443,49 @@ export default function WarehouseOutbound() {
                       </div>
                     )}
                     {actionType === 'picking' && (
-                      <Button onClick={(e) => { e.stopPropagation(); handleCreateReceipt(order); }} disabled={isProcessing} className="w-full bg-purple-600">
+                      <Button onClick={(e) => { e.stopPropagation(); handleCreateReceipt(order); }} disabled={isProcessing} className="w-full bg-purple-600 hover:bg-purple-700">
                         {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ClipboardList className="mr-2 h-4 w-4" />}
-                        Tạo Phiếu Xuất Kho
+                        Tạo Phiếu Xuất Kho (DRAFT)
                       </Button>
                     )}
                     {actionType === 'draft' && (
-                      <Button onClick={(e) => {
-                        e.stopPropagation();
-                        const r = orderReceipts[order.order_id].find(r => r.status === 'DRAFT');
-                        if (r) handleConfirmReceipt(order, r);
-                      }} disabled={isProcessing} className="w-full bg-yellow-600 hover:bg-yellow-700 text-white">
-                        {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
-                        Xác nhận xuất kho
-                      </Button>
+                      <div className="space-y-3">
+                        <p className="text-sm font-semibold border-b pb-1">Phiếu xuất liên quan (DRAFT):</p>
+                        {(orderReceipts[order.order_id] || [])
+                          .filter(r => r.status === 'DRAFT')
+                          .map(receipt => (
+                            <div key={receipt.receipt_id} className="flex items-center justify-between p-3 bg-white rounded-lg border shadow-sm">
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold text-slate-700">Phiếu #{receipt.receipt_id}</span>
+                                <span className="text-[10px] text-muted-foreground uppercase">{receipt.receipt_code}</span>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button 
+                                  size="sm" 
+                                  variant="outline" 
+                                  onClick={(e) => { e.stopPropagation(); handleCancelReceipt(receipt); }}
+                                  disabled={String(processingOrderId).startsWith('receipt-')}
+                                  className="text-red-500 border-red-100 h-8 text-xs"
+                                >
+                                  Hủy
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  onClick={(e) => { e.stopPropagation(); handleConfirmReceipt(receipt); }}
+                                  disabled={String(processingOrderId).startsWith('receipt-')}
+                                  className="bg-orange-600 hover:bg-orange-700 h-8 text-xs"
+                                >
+                                  {processingOrderId === `receipt-${receipt.receipt_id}` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                                  Xác nhận xuất kho (READY)
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
                     )}
-                    {actionType === 'completed' && (
+                    {actionType === 'ready' && (
                       <div className="w-full p-2 bg-blue-50 text-blue-700 text-xs text-center rounded border border-blue-200 flex items-center justify-center gap-2 font-medium">
-                        <Truck className="h-4 w-4" /> Đã hoàn tất xuất kho
+                        <Truck className="h-4 w-4" /> Đã sẵn sàng giao hàng (COMPLETED)
                       </div>
                     )}
                   </div>
@@ -470,67 +498,7 @@ export default function WarehouseOutbound() {
     );
   };
 
-  const renderPickingBatches = () => {
-    // Only calculate for orders that are CHECKED in the DRAFT tab
-    const selectedOrders = draftOrders.filter(o => checkedOrders[o.order_id]);
-    if (selectedOrders.length === 0) return null;
 
-    const batchSummary = {};
-    selectedOrders.forEach(order => {
-      (order.order_details || []).forEach(detail => {
-        const fills = orderFills[detail.order_detail_id] || [];
-        fills.forEach(fill => {
-          if (!batchSummary[fill.batch_id]) {
-            batchSummary[fill.batch_id] = {
-              batch_id: fill.batch_id,
-              product_name: detail.product_name,
-              total_quantity: 0
-            };
-          }
-          batchSummary[fill.batch_id].total_quantity += fill.quantity;
-        });
-        // If there are no fills yet, we might optionally want to show missing batches,
-        // but since warehouse selects orders TO get batches, we'll just show what's there.
-      });
-    });
-
-    const batchList = Object.values(batchSummary);
-    if (batchList.length === 0) return (
-      <Card className="mb-6 border-purple-200 bg-purple-50/30">
-        <CardContent className="p-4 text-sm italic text-muted-foreground">
-          Các đơn hàng đã chọn chưa có phân bổ Lô từ hệ thống.
-        </CardContent>
-      </Card>
-    );
-
-    return (
-      <Card className="mb-6 border-purple-200 bg-purple-50/30 shadow-sm animate-in fade-in slide-in-from-top-2">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Package className="h-5 w-5 text-purple-600" />
-            Tổng kiểm kê Lô cần xuất (Dựa trên đơn đã chọn)
-          </CardTitle>
-          <CardDescription>Số lượng tổng hợp để đi nhặt hàng một lần</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {batchList.map(batch => (
-              <div key={batch.batch_id} className="flex items-center gap-3 p-3 border rounded-lg bg-white shadow-sm">
-                <div className="flex-1">
-                  <p className="font-semibold text-sm">{batch.product_name}</p>
-                  <p className="text-xs text-muted-foreground">Lô #{batch.batch_id}</p>
-                </div>
-                <div className="text-right">
-                  <Badge className="bg-purple-600 text-sm px-2 py-1">{batch.total_quantity}</Badge>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">tổng</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    );
-  };
 
   if (isLoading && allOrders.length === 0) {
     return <div className="flex justify-center items-center h-96"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
@@ -552,13 +520,13 @@ export default function WarehouseOutbound() {
             1. Duyệt đơn {waitingConfirmationOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-green-100 text-green-700">{waitingConfirmationOrders.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="picking" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            2. Soạn hàng {pickingOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-purple-100 text-purple-700">{pickingOrders.length}</Badge>}
+            2. Picking (Soạn hàng) {pickingOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-purple-100 text-purple-700">{pickingOrders.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="draft" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            3. Phiếu tạm {draftOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-yellow-100 text-yellow-700">{draftOrders.length}</Badge>}
+            3. Draft (Phiếu tạm) {draftReceiptOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-orange-100 text-orange-700">{draftReceiptOrders.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="dispatched" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            4. Xuất kho {dispatchedOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-700">{dispatchedOrders.length}</Badge>}
+            4. Completed (Xuất kho) {readyOrDoneOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-700">{readyOrDoneOrders.length}</Badge>}
           </TabsTrigger>
         </TabsList>
 
@@ -569,42 +537,15 @@ export default function WarehouseOutbound() {
           {renderOrderList(pickingOrders, 'picking')}
         </TabsContent>
         <TabsContent value="draft" className="mt-0">
-          {renderPickingBatches()}
-
-          {draftOrders.length > 0 && (
-            <div className="flex justify-between items-center mb-4">
-              <div className="text-sm text-muted-foreground italic">
-                {Object.values(checkedOrders).filter(Boolean).length} đơn đã chọn
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleToggleSelectAll}
-                  className="text-purple-700 border-purple-200 hover:bg-purple-50"
-                >
-                  {draftOrders.every(o => !!checkedOrders[o.order_id]) ? 'Bỏ chọn tất cả' : 'Chọn tất cả đơn hàng'}
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleConfirmReceipts}
-                  disabled={isLoading || Object.values(checkedOrders).filter(Boolean).length === 0}
-                  className="bg-yellow-600 hover:bg-yellow-700 text-white"
-                >
-                  <PackageCheck className="mr-2 h-4 w-4" />
-                  Xác nhận xuất kho hàng loạt
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {renderOrderList(draftOrders, 'draft')}
+          {renderOrderList(draftReceiptOrders, 'draft')}
         </TabsContent>
-        <TabsContent value="dispatched" className="mt-0">{renderOrderList(dispatchedOrders, 'completed')}</TabsContent>
+        <TabsContent value="dispatched" className="mt-0">
+          {renderOrderList(readyOrDoneOrders, 'ready')}
+        </TabsContent>
       </Tabs>
       <Dialog open={allocationModal.isOpen} onOpenChange={(open) => setAllocationModal(prev => ({ ...prev, isOpen: open }))}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
+          <DialogHeader> 
             <DialogTitle className="text-xl flex items-center gap-2 text-green-700">
               <PackageCheck className="h-6 w-6" />
               Duyệt Đơn Hàng (#{allocationModal.order?.order_id})
@@ -632,34 +573,52 @@ export default function WarehouseOutbound() {
                 
                 const currentAllocation = allocationModal.manualAllocations[detail.order_detail_id] || {};
                 const totalAllocated = Object.values(currentAllocation).reduce((a, b) => a + b, 0);
+                const isFulfilled = totalAllocated >= detail.quantity;
 
                 return (
-                  <div key={detail.order_detail_id} className="border rounded-xl p-4 bg-slate-50/50 space-y-4">
+                  <div key={detail.order_detail_id} className={`border rounded-xl p-4 space-y-4 ${isFulfilled ? 'bg-green-50/30 border-green-100' : 'bg-slate-50/50'}`}>
                     <div className="flex justify-between items-center border-b pb-2">
                       <div className="flex items-center gap-2">
                         <span className="font-black text-lg text-slate-800">{detail.product_name}</span>
-                        <Badge variant="outline" className="bg-white">Yêu cầu: {detail.quantity}</Badge>
+                        <Badge variant={isFulfilled ? "default" : "outline"} className={isFulfilled ? "bg-green-600 hover:bg-green-700" : "bg-white"}>
+                          Đã chọn: {totalAllocated} / {detail.quantity}
+                        </Badge>
                       </div>
                     </div>
 
-                    <div className="grid gap-3">
+                    <div className="grid gap-3 max-h-[250px] overflow-y-auto pr-2">
                       {availableBatches.length === 0 ? (
                         <p className="text-xs text-red-500 font-bold italic">⚠️ Hết hàng trong kho!</p>
                       ) : (
-                        availableBatches.map(batch => (
-                          <div key={batch.batch_id} className="flex items-center justify-between bg-white p-3 rounded-lg border shadow-sm">
-                            <div className="flex flex-col">
-                              <span className="text-sm font-bold">Lô #{batch.batch_id}</span>
-                              <span className="text-[10px] text-muted-foreground uppercase font-black">HSD: {batch.expiry_date ? new Date(batch.expiry_date).toLocaleDateString('vi-VN') : 'N/A'}</span>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <div className="text-right flex flex-col">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">Tồn:</span>
-                                <span className="text-sm font-black">{batch.quantity} {detail.unit || 'SP'}</span>
+                        availableBatches.map(batch => {
+                          const allocated = allocationModal.manualAllocations[detail.order_detail_id]?.[batch.batch_id] || 0;
+                          return (
+                            <div key={batch.batch_id} className={`flex items-center justify-between p-3 rounded-lg border shadow-sm transition-all ${allocated > 0 ? 'bg-green-50 border-green-200 ring-1 ring-green-200' : 'bg-white'}`}>
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold">Lô #{batch.batch_id}</span>
+                                <span className="text-[10px] text-muted-foreground uppercase font-black">HSD: {batch.expiry_date ? new Date(batch.expiry_date).toLocaleDateString('vi-VN') : 'N/A'}</span>
+                              </div>
+                              <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-muted-foreground font-medium">Lấy:</span>
+                                  <Input 
+                                    type="number" 
+                                    min="0"
+                                    max={batch.quantity}
+                                    className={`w-20 h-8 text-right font-bold ${allocated > 0 ? 'text-green-700 border-green-300' : ''}`}
+                                    placeholder="0"
+                                    value={allocated || ''} 
+                                    onChange={(e) => handleUpdateManualAllocation(detail.order_detail_id, batch.batch_id, e.target.value, batch.quantity)}
+                                  />
+                                </div>
+                                <div className="text-right flex flex-col min-w-[3rem]">
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase">Tồn:</span>
+                                  <span className="text-sm font-black">{batch.quantity} {detail.unit || 'SP'}</span>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   </div>

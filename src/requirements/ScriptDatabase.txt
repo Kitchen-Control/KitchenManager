@@ -26,8 +26,11 @@ Table stores {
 // --- 2. PRODUCTS & RECIPES ---
 Enum product_type_enum {
   RAW_MATERIAL
-  SEMI_FINISHED
-  FINISHED_PRODUCT
+  MAIN
+  SIDE
+  BEVERAGE
+  DESSERT
+  SAUCE
 }
 
 
@@ -36,6 +39,7 @@ Table products {
   product_name varchar
   product_type product_type_enum
   unit varchar
+  price float
   shelf_life_days int [note: "sản phẩm có thời gian sủ dụng bao ngày (ex: 30 days)"]
 }
 
@@ -58,8 +62,12 @@ Table recipe_details {
 
 
 Enum production_plan_status {
+  DRAFT
+  WAITING
   PROCESSING
+  COMPLETE_ONE_SECTION
   DONE
+  CANCEL
 }
 
 
@@ -84,21 +92,24 @@ Table production_plan_details {
 
 
 Enum orders_status {
-  WAITTING
+  WAITING
   PROCESSING
   DISPATCHED
   DELIVERING
+  PARTIAL_DELIVERED
   DONE
   DAMAGED
-  CANCLED
+  CANCELED
 }
 
 
 Table orders {
   order_id int [pk, increment]
+  parent_order_id int
   delivery_id int
   store_id int
   order_date datetime
+  type varchar [note: "NORMAL, SUPPLEMENT"]
   status orders_status
   img varchar
   comment varchar
@@ -117,8 +128,7 @@ Enum log_batches_enum {
   PROCESSING
   WAITING_TO_CONFIRM
   DONE
-  WAITING_TO_CANCLE
-  EXPIRED
+  WAITING_TO_CANCEL
   DAMAGED
 }
 
@@ -175,6 +185,7 @@ Enum deliveries_status {
   WAITING
   DELIVERING
   DONE
+  CANCELED
 }
 
 
@@ -216,7 +227,7 @@ Table reports {
 Enum receipt_status {
   DRAFT
   COMPLETED
-  CANCELLED
+  CANCELED
 }
 
 
@@ -280,11 +291,23 @@ Ref: quality_feedbacks.order_id - orders.order_id
 Ref: reports.user_id > users.user_id
 
 
-
-
 Ref: users.user_id < deliveries.shipper_id
 Ref: products.product_id < production_plan_details.product_id
 Ref: production_plans.plan_id < production_plan_details.plan_id
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

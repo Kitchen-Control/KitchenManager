@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getDeliveries, getAllUsers, getAllStores, deleteDelivery, updateDeliveryStatus, updateOrderStatus } from '../../data/api';
+import { getDeliveries, updateDeliveryStatus, updateOrderStatus } from '../../data/api';
 import { toast } from '../../components/ui/sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';

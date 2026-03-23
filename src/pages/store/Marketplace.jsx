@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getProducts, getProductsByType } from '../../data/api';
+import { getProducts, getProductsByType, getInventories, getOrdersByStatus } from '../../data/api';
 import { useCart } from '../../contexts/CartContext';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -57,9 +57,8 @@ export default function Marketplace() {
           const typeProducts = await getProductsByType(selectedType);
           result = typeProducts || [];
         } catch (error) {
-          console.error('API filtering error:', error);
-          // Fallback to local filter if API fails
-          result = result.filter(p => p.product_type === selectedType);
+          console.error('Filtering error:', error);
+          result = products.filter(p => p.product_type === selectedType);
         } finally {
           setIsLoading(false);
         }

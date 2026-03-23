@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   fetchOrders,
+  getOrdersByStatus,
   getAllShippers,
   getAllStores,
   createDelivery,
+  getReceiptsByStatus,
 } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -35,26 +37,54 @@ import { toast } from 'sonner';
 
 export default function OrderAggregation() {
   const [orders, setOrders] = useState([]);
+  const [readyReceipts, setReadyReceipts] = useState([]);
   const [shippers, setShippers] = useState([]);
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedOrders, setSelectedOrders] = useState([]);
+  const [selectedReceipts, setSelectedReceipts] = useState([]); // Array of receipt_id
   const [showCreateDelivery, setShowCreateDelivery] = useState(false);
   const [selectedShipper, setSelectedShipper] = useState('');
   const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().split('T')[0]);
   const [isCreating, setIsCreating] = useState(false);
 
-  useEffect(() => {
+  const fetchEverything = useCallback(() => {
+    setLoading(true);
     Promise.all([
-      fetchOrders().catch(() => []),
-      getAllShippers().catch(() => []),
-      getAllStores().catch(() => []),
-    ]).then(([ordersRes, shippersRes, storesRes]) => {
-      setOrders(Array.isArray(ordersRes) ? ordersRes : []);
+      fetchOrders().catch(() => []), 
+      getAllShippers().catch(() => []), 
+      getAllStores().catch(() => []), 
+    ]).then(async ([ordersRes, shippersRes, storesRes]) => {
+      const ordersData = Array.isArray(ordersRes) ? ordersRes : [];
+      const relevantOrders = ordersData.filter(o => 
+        ['DISPATCHED', 'PROCESSING', 'DELIVERING', 'PARTIAL_DELIVERED'].includes(o.status)
+      );
+
+      const receiptsPerOrder = await Promise.all(
+        relevantOrders.map(async (o) => {
+          try {
+            const res = await getReceiptsByOrderId(o.order_id);
+            return Array.isArray(res) ? res : [];
+          } catch (e) { return []; }
+        })
+      );
+
+      const allReceipts = receiptsPerOrder.flat();
+      const unassignedReceipts = allReceipts.filter(r => {
+        if (r.status !== 'COMPLETED') return false;
+        const order = ordersData.find(o => o.order_id === r.order_id);
+        return !order || !order.delivery_id;
+      });
+      
+      setReadyReceipts(unassignedReceipts);
+      setOrders(ordersData);
       setShippers(Array.isArray(shippersRes) ? shippersRes : []);
       setStores(Array.isArray(storesRes) ? storesRes : []);
     }).finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetchEverything();
+  }, [fetchEverything]);
 
   const allRelevantOrders = orders
     .filter((o) => (o.status === 'DISPATCHED' || o.status === 'PROCESSING') && !o.delivery_id)
@@ -75,38 +105,44 @@ export default function OrderAggregation() {
 
   // shippers is already fetched directly from /users/shippers API
 
-  const toggleOrder = (orderId) => {
-    setSelectedOrders((prev) =>
-      prev.includes(orderId) ? prev.filter((id) => id !== orderId) : [...prev, orderId]
+  const toggleReceipt = (receiptId) => {
+    setSelectedReceipts((prev) =>
+      prev.includes(receiptId) ? prev.filter((id) => id !== receiptId) : [...prev, receiptId]
     );
   };
 
   const toggleAll = () => {
-    if (selectedOrders.length === selectableOrders.length) {
-      setSelectedOrders([]);
+    if (selectedReceipts.length === readyReceipts.length) {
+      setSelectedReceipts([]);
     } else {
-      setSelectedOrders(selectableOrders.map((o) => o.order_id));
+      setSelectedReceipts(readyReceipts.map((r) => r.receipt_id));
     }
   };
 
   const handleCreateDelivery = async () => {
-    if (!selectedShipper || selectedOrders.length === 0) {
-      toast.error('Vui lòng chọn shipper và ít nhất 1 đơn hàng');
+    if (!selectedShipper || selectedReceipts.length === 0) {
+      toast.error('Vui lòng chọn shipper và ít nhất 1 phiếu xuất');
       return;
     }
     setIsCreating(true);
     try {
+      // Step 4 Flow 1: Logic assign is per receipt. 
+      // If our API only supports createDelivery(orderIds), we convert receipts back to distinct orderIds.
+      const orderIds = [...new Set(readyReceipts
+        .filter(r => selectedReceipts.includes(r.receipt_id))
+        .map(r => r.order_id))];
+
       await createDelivery({
         shipperId: parseInt(selectedShipper, 10),
         deliveryDate,
-        orderIds: selectedOrders,
+        orderIds: orderIds,
       });
-      const ordersRes = await fetchOrders();
-      setOrders(Array.isArray(ordersRes) ? ordersRes : []);
-      toast.success(`Đã tạo chuyến giao hàng với ${selectedOrders.length} đơn`);
+      
+      toast.success(`Đã tạo chuyến giao hàng cho ${selectedReceipts.length} phiếu xuất`);
       setShowCreateDelivery(false);
-      setSelectedOrders([]);
+      setSelectedReceipts([]);
       setSelectedShipper('');
+      fetchEverything();
     } catch (error) {
       toast.error(error.message || 'Tạo chuyến giao hàng thất bại');
     } finally {
@@ -114,13 +150,15 @@ export default function OrderAggregation() {
     }
   };
 
-  const selectedOrdersData = selectableOrders.filter((o) => selectedOrders.includes(o.order_id));
-  const groupedByStore = selectedOrdersData.reduce((acc, order) => {
-    const storeId = order.store_id;
-    if (!acc[storeId]) {
-      acc[storeId] = { store: order.store, orders: [] };
+  const selectedReceiptsData = readyReceipts.filter((r) => selectedReceipts.includes(r.receipt_id));
+  const groupedByStore = selectedReceiptsData.reduce((acc, receipt) => {
+    const orderId = receipt.order_id;
+    if (!acc[orderId]) {
+      const order = orders.find(o => o.order_id === orderId);
+      const store = stores.find(s => s.store_id === order?.store_id) || { store_name: order?.store_name || `Đơn #${orderId}` };
+      acc[orderId] = { store, receipts: [] };
     }
-    acc[storeId].orders.push(order);
+    acc[orderId].receipts.push(receipt);
     return acc;
   }, {});
 
@@ -133,13 +171,13 @@ export default function OrderAggregation() {
     );
   }
 
-  if (allRelevantOrders.length === 0) {
+  if (readyReceipts.length === 0 && orders.length === 0) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold mb-6">Gom đơn hàng</h1>
+        <h1 className="text-2xl font-bold mb-6 text-slate-800">Điều phối giao hàng</h1>
         <EmptyState
-          title="Không có đơn hàng nào"
-          description="Hiện không có đơn hàng nào đã được Warehouse xác nhận xuất kho để gom chuyến."
+          title="Không có phiếu xuất hoặc đơn hàng"
+          description="Hiện không có phiếu xuất nào READY hoặc đơn hàng nào đang xử lý."
           icon={Package}
         />
       </div>
@@ -150,92 +188,92 @@ export default function OrderAggregation() {
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Gom đơn hàng</h1>
+          <h1 className="text-2xl font-bold text-slate-800">Điều phối giao hàng</h1>
           <p className="text-muted-foreground">
-            Chỉ gom những đơn hàng đã được Warehouse xác nhận (DISPATCHED)
+            Gán Shipper cho các phiếu xuất đã sẵn sàng (READY)
           </p>
         </div>
         <div className="flex gap-2">
-          {selectableOrders.length > 0 && (
+          {readyReceipts.length > 0 && (
             <Button
               variant="outline"
               onClick={toggleAll}
             >
-              {selectedOrders.length === selectableOrders.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả sẵn sàng'}
+              {selectedReceipts.length === readyReceipts.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả Phiếu READY'}
             </Button>
           )}
           <Button
             onClick={() => setShowCreateDelivery(true)}
-            disabled={selectedOrders.length === 0}
-            className="gap-2"
+            disabled={selectedReceipts.length === 0}
+            className="gap-2 bg-indigo-600 hover:bg-indigo-700"
           >
             <Truck className="h-4 w-4" />
-            Tạo chuyến xe ({selectedOrders.length})
+            Tạo chuyến xe ({selectedReceipts.length} phiếu)
           </Button>
         </div>
       </div>
 
-      <div className="grid gap-6">
-        {selectableOrders.length > 0 && (
+      <div className="grid gap-8">
+        {readyReceipts.length > 0 && (
           <section>
-            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
-              Sẵn sàng giao ({selectableOrders.length})
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-indigo-700 border-b pb-2">
+              <CheckCircle2 className="h-5 w-5" />
+              Phiếu xuất chờ gán ({readyReceipts.length})
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {selectableOrders.map((order) => (
-                <Card
-                  key={order.order_id}
-                  className={`cursor-pointer transition-all border-2 ${
-                    selectedOrders.includes(order.order_id)
-                      ? 'border-primary ring-1 ring-primary'
-                      : 'hover:border-muted-foreground/50'
-                  }`}
-                  onClick={() => toggleOrder(order.order_id)}
-                >
-                  <CardHeader className="pb-2">
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          checked={selectedOrders.includes(order.order_id)}
-                          onCheckedChange={() => toggleOrder(order.order_id)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <CardTitle className="text-lg">Đơn #{order.order_id}</CardTitle>
+              {readyReceipts.map((receipt) => {
+                const isSelected = selectedReceipts.includes(receipt.receipt_id);
+                const order = orders.find(o => o.order_id === receipt.order_id);
+                const store = stores.find(s => s.store_id === order?.store_id);
+                
+                return (
+                  <Card 
+                    key={receipt.receipt_id} 
+                    className={`cursor-pointer transition-all border-2 ${isSelected ? 'border-primary bg-primary/5' : 'hover:border-primary/50'}`}
+                    onClick={() => toggleReceipt(receipt.receipt_id)}
+                  >
+                    <CardHeader className="p-4 flex flex-row items-center justify-between space-y-0 pb-2">
+                      <div>
+                        <CardTitle className="text-lg">Phiếu #{receipt.receipt_id}</CardTitle>
+                        <p className="text-sm text-muted-foreground">Mã: {receipt.receipt_code}</p>
                       </div>
-                      <StatusBadge status={order.status} type="order" />
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      <div className="flex items-start gap-2 text-sm">
-                        <MapPin className="h-4 w-4 mt-0.5 text-muted-foreground" />
-                        <div>
-                          <p className="font-medium">{order.store_name}</p>
-                          <p className="text-muted-foreground line-clamp-1">{order.store?.address}</p>
-                        </div>
+                      <div className={`h-6 w-6 rounded-full border-2 flex items-center justify-center ${isSelected ? 'bg-primary border-primary shadow-sm' : 'border-muted'}`}>
+                        {isSelected && <CheckCircle2 className="h-4 w-4 text-white" />}
                       </div>
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Package className="h-4 w-4" />
-                        <span>{order.details.length} sản phẩm</span>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-2 space-y-3">
+                      <div className="text-sm space-y-1">
+                        <p className="font-bold text-slate-700 flex items-center gap-1.5">
+                          <MapPin className="h-4 w-4 text-primary" /> 
+                          {store ? store.store_name : order?.store_name || (order ? `Cửa hàng #${order.store_id}` : 'Đang tải...')}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Đơn hàng gốc: #{receipt.order_id}</p>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                      
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {(receipt.receipt_details || []).map((item, idx) => (
+                          <Badge key={idx} variant="secondary" className="text-[10px] px-1.5 h-5 bg-slate-100 text-slate-700 hover:bg-slate-200 border-none">
+                            {item.product_name || `SP #${item.product_id}`} x{item.quantity}
+                          </Badge>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           </section>
         )}
 
         {previewOrders.length > 0 && (
           <section>
-            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2 text-muted-foreground">
+            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2 text-muted-foreground border-b pb-2">
               <Loader2 className="h-5 w-5 animate-spin" />
-              Đang chuẩn bị tại Warehouse ({previewOrders.length})
+              Đang soạn tại Warehouse ({previewOrders.length})
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 opacity-70">
               {previewOrders.map((order) => (
-                <Card key={order.order_id} className="bg-muted/30">
+                <Card key={order.order_id} className="bg-muted/30 border-dashed">
                   <CardHeader className="pb-2">
                     <div className="flex justify-between items-start">
                       <CardTitle className="text-lg text-muted-foreground">Đơn #{order.order_id}</CardTitle>
@@ -244,11 +282,11 @@ export default function OrderAggregation() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2 text-sm text-muted-foreground">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4" />
-                        <span>{order.store_name}</span>
+                      <div className="flex items-center gap-2 leading-none">
+                        <MapPin className="h-3 w-3" />
+                        <span>{stores.find(s => s.store_id === order.store_id)?.store_name || order.store_name || `Cửa hàng #${order.store_id}`}</span>
                       </div>
-                      <p className="italic">Đang chờ Warehouse xác nhận xuất kho...</p>
+                      <p className="italic text-xs">Đang soạn hàng / Chờ xác nhận phiếu xuất...</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -266,13 +304,16 @@ export default function OrderAggregation() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Đơn hàng đã chọn ({selectedOrders.length})</Label>
+              <Label>Phiếu xuất đã chọn ({selectedReceipts.length})</Label>
               <div className="max-h-40 overflow-y-auto space-y-2 p-3 bg-muted/50 rounded-lg">
-                {Object.values(groupedByStore).map(({ store, orders: ords }) => (
-                  <div key={store?.store_id || Math.random()} className="text-sm">
-                    <p className="font-medium">{store?.store_name || 'Cửa hàng không xác định'}</p>
-                    <p className="text-muted-foreground text-xs">{store?.address}</p>
-                    <p className="text-muted-foreground">{ords.length} đơn hàng</p>
+                {Object.values(groupedByStore).map(({ store, receipts: recs }) => (
+                  <div key={store.store_id || Math.random()} className="text-sm border-b pb-2 last:border-0">
+                    <p className="font-medium text-indigo-700">{store.store_name}</p>
+                    <div className="pl-2 mt-1">
+                      {recs.map(r => (
+                        <p key={r.receipt_id} className="text-xs text-muted-foreground">• Phiếu #{r.receipt_id} ({r.receipt_code})</p>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -49,6 +49,7 @@ function mapProduct(p) {
     product_name: p.productName,
     product_type: p.productType,
     unit: p.unit,
+    price: p.price,
     shelf_life_days: p.shelfLifeDays,
     available_stock: p.availableStock ?? 0,
     image: p.img || '📦',
@@ -80,10 +81,12 @@ function mapOrder(o) {
     status: o.status,
     img: o.img,
     comment: o.comment,
+    total_price: o.totalPrice,
     order_details: Array.isArray(o.orderDetails) ? o.orderDetails.map(mapOrderDetail) : [],
     feedback_id: o.feedbackId,
     feedback_rating: o.feedbackRating,
     feedback_comment: o.feedbackComment,
+    delivery_id: o.deliveryId, // Added for Coordinator/Shipper logic
   };
 }
 
@@ -103,7 +106,6 @@ function mapDelivery(d) {
 function mapInventory(inv) {
   if (!inv) return null;
   const batchObj = inv.batch;
-  // Deeply extract product_id from nested sources as backup
   const productId = inv.productId ??
     batchObj?.productId ??
     batchObj?.product?.productId ??
@@ -137,6 +139,18 @@ function mapLogBatch(b) {
   };
 }
 
+function mapReceiptDetail(rd) {
+  if (!rd) return null;
+  return {
+    receipt_detail_id: rd.receiptDetailId,
+    receipt_id: rd.receiptId,
+    product_id: rd.productId ?? rd.product?.productId,
+    product_name: rd.productName ?? rd.product?.productName,
+    quantity: rd.quantity,
+    price: rd.price,
+  };
+}
+
 function mapReceipt(r) {
   if (!r) return null;
   return {
@@ -146,6 +160,8 @@ function mapReceipt(r) {
     export_date: r.exportDate,
     status: r.status,
     note: r.note,
+    receipt_details: Array.isArray(r.receiptDetails) ? r.receiptDetails.map(mapReceiptDetail) : [],
+    inventory_transactions: Array.isArray(r.inventoryTransactions) ? r.inventoryTransactions : [],
   };
 }
 
@@ -157,6 +173,21 @@ function mapOrderDetailFill(f) {
     batch_id: f.batchId,
     quantity: f.quantity,
     created_at: f.createdAt,
+  };
+}
+
+function mapWasteLog(w) {
+  if (!w) return null;
+  return {
+    waste_id: w.wasteId,
+    product_id: w.productId,
+    product_name: w.productName,
+    batch_id: w.batchId,
+    order_id: w.orderId,
+    quantity: w.quantity,
+    waste_type: w.wasteType,
+    note: w.note,
+    created_at: w.createdAt,
   };
 }
 
@@ -178,12 +209,10 @@ function mapUserResponse(u) {
 
   if (!roleId && roleName) {
     const cleanName = String(roleName).trim().toLowerCase();
-    // Exact match
     const key = Object.keys(ROLE_NAME_TO_ID).find(k => k === cleanName);
     if (key) {
       roleId = ROLE_NAME_TO_ID[key];
     } else {
-      // Fuzzy/Partial match fallbacks
       if (cleanName.includes('admin')) roleId = ROLE_ID.ADMIN;
       else if (cleanName.includes('kitchen')) roleId = ROLE_ID.KITCHEN_MANAGER;
       else if (cleanName.includes('coord')) roleId = ROLE_ID.SUPPLY_COORDINATOR;
@@ -264,7 +293,7 @@ const authFetch = async (url, options = {}) => {
   return fetch(url, { ...options, headers });
 };
 
-// --- Authentication (OpenAPI: /auth/login) ---
+// --- Authentication ---
 
 const LOGIN_ERROR_MSG = 'Tên đăng nhập hoặc mật khẩu không đúng.';
 
@@ -281,9 +310,13 @@ const parseJwt = (token) => {
   }
 };
 
+/**
+ * Login using v2 JWT auth: POST /auth/v2/login
+ * Then fetches user details: GET /users/{userId}
+ */
 export const loginUser = async (username, password) => {
   try {
-    // Phase 1: Authentication using v2 (OpenAPI: /auth/v2/login)
+    // Phase 1: POST /auth/v2/login -> { token, authenticated }
     const loginResponse = await fetch(`${API_BASE_URL}/auth/v2/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -298,25 +331,20 @@ export const loginUser = async (username, password) => {
     }
 
     const loginData = await loginResponse.json();
-    // Expected AuthenticationResponse: { token, authenticated }
     const token = loginData?.token;
 
     if (!token || !loginData.authenticated) {
       throw new Error(LOGIN_ERROR_MSG);
     }
 
-    // Phase 2: Get user details from the token or a separate endpoint
-    // We'll use /auth/introspect or /users/{id} to get the full profile
-    // Standard approach: Decode token for basic info, then fetch full details
+    // Phase 2: Decode token to get userId, then GET /users/{userId}
     const decodedToken = parseJwt(token);
-    const userId = decodedToken?.userId || decodedToken?.sub; // Adjust based on actual JWT payload
+    const userId = decodedToken?.userId || decodedToken?.sub;
 
     if (!userId) {
       console.error("JWT Payload lacks userId or sub:", decodedToken);
       throw new Error('Token không hợp lệ (thiếu thông tin người dùng).');
     }
-
-    console.log(`[Auth Phase 2] Fetching user details for ID: ${userId}`);
 
     const detailResponse = await fetch(`${API_BASE_URL}/users/${userId}`, {
       method: 'GET',
@@ -331,13 +359,11 @@ export const loginUser = async (username, password) => {
     }
 
     const userData = await detailResponse.json();
-    console.log("[Auth Phase 2] User Details Raw:", userData);
     const u = userData?.data ?? userData;
 
-    // Use the mapper to ensure consistent structure
     const mappedUser = mapUserResponse(u);
     if (mappedUser) {
-      mappedUser.token = token; // Inject token for subsequent requests
+      mappedUser.token = token;
       return { user: mappedUser, token: token };
     }
 
@@ -348,37 +374,66 @@ export const loginUser = async (username, password) => {
   }
 };
 
+/**
+ * Introspect token: POST /auth/introspect
+ * @param {string} token
+ * @returns {{ valid: boolean }}
+ */
+export const introspectToken = async (token) => {
+  const response = await fetch(`${API_BASE_URL}/auth/introspect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  return await handleResponse(response);
+};
+
 // --- Orders API ---
 
+/** GET /orders */
 export const fetchOrders = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders`));
   return Array.isArray(data) ? data.map(mapOrder) : data;
 };
 
-export const getWaitingOrders = async () => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/waiting`));
-  return Array.isArray(data) ? data.map(mapOrder) : data;
-};
-
+/** GET /orders/get-by-store/{storeId} */
 export const getOrdersByStore = async (storeId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/get-by-store/${storeId}`));
   return Array.isArray(data) ? data.map(mapOrder) : data;
 };
 
+/** GET /orders/get-by-shipper/{shipperId} */
 export const getOrdersByShipperId = async (shipperId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/get-by-shipper/${shipperId}`));
   return Array.isArray(data) ? data.map(mapOrder) : data;
 };
 
+/** GET /orders/filter-by-status?status={status} */
 export const getOrdersByStatus = async (status) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/filter-by-status?status=${status}`));
   return Array.isArray(data) ? data.map(mapOrder) : data;
 };
 
-/** @param {{ storeId?: number, store_id?: number, comment?: string, orderDetails?: Array<{ productId?: number, product_id?: number, quantity: number }> }} orderData */
+/** Convenience wrapper: get orders with WAITING status */
+export const getWaitingOrders = () => getOrdersByStatus('WAITING');
+
+/**
+ * GET /orders/{orderId} — Fetch a single order with full details (including orderDetails)
+ * @param {number|string} orderId
+ */
+export const getOrderById = async (orderId) => {
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/${orderId}`));
+  return data ? mapOrder(data) : null;
+};
+
+/**
+ * POST /orders
+ * @param {{ storeId?: number, store_id?: number, comment?: string, type?: string, orderDetails?: Array<{ productId?: number, product_id?: number, quantity: number }> }} orderData
+ */
 export const createOrder = async (orderData) => {
   const storeId = orderData.storeId ?? orderData.store_id;
   const comment = orderData.comment ?? '';
+  const type = orderData.type ?? 'NORMAL';
   const orderDetails = (orderData.orderDetails ?? []).map((od) => ({
     productId: od.productId ?? od.product_id,
     quantity: Number(od.quantity),
@@ -386,35 +441,68 @@ export const createOrder = async (orderData) => {
   const response = await authFetch(`${API_BASE_URL}/orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ storeId, comment, orderDetails }),
+    body: JSON.stringify({ storeId, comment, type, orderDetails }),
   });
   const data = await handleResponse(response);
   return data ? mapOrder(data) : data;
 };
 
-export const updateOrderStatus = async (orderId, status, storeId = '0') => {
+/**
+ * Create additional (supplement) order with a parent order
+ * PUT /orders/{id}
+ * @param {number} parentOrderId
+ * @param {{ storeId?: number, comment?: string, type?: string, orderDetails?: Array }} orderData
+ */
+export const createAdditionalOrder = async (parentOrderId, orderData) => {
+  const storeId = orderData.storeId ?? orderData.store_id;
+  const comment = orderData.comment ?? '';
+  const type = orderData.type ?? 'SUPPLEMENT';
+  const orderDetails = (orderData.orderDetails ?? []).map((od) => ({
+    productId: od.productId ?? od.product_id,
+    quantity: Number(od.quantity),
+  }));
+  const response = await authFetch(`${API_BASE_URL}/orders/${parentOrderId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ storeId, comment, type, orderDetails }),
+  });
+  return await handleResponse(response);
+};
+
+/**
+ * Update order status
+ * PATCH /orders/update-status/{note}?orderId=&status=&note=
+ * NOTE: The spec has `note` as the path variable (oddly), and also as an optional query param.
+ * We pass note in the query params as well.
+ * @param {number} orderId
+ * @param {string} status - One of: WAITING, PROCESSING, DISPATCHED, DELIVERING, PARTIAL_DELIVERED, DONE, DAMAGED, CANCELED
+ * @param {string} note
+ */
+export const updateOrderStatus = async (orderId, status, note = '') => {
   const params = new URLSearchParams();
   params.append('orderId', orderId);
   params.append('status', status);
-  if (storeId) params.append('storeId', storeId); 
-  
-  // Spec: PATCH /orders/update-status/{storeId}
-  const response = await authFetch(`${API_BASE_URL}/orders/update-status/${storeId}?${params.toString()}`, {
+  if (note) params.append('note', note);
+
+  // Simplified: remove path variable that was likely causing 500
+  const response = await authFetch(`${API_BASE_URL}/orders/update-status?${params.toString()}`, {
     method: 'PATCH',
   });
   return await handleResponse(response);
 };
 
-// FEFO is handled automatically by backend when status moves to PROCESSING.
-// Call getFefoSuggestion to see the calculated batches.
+/**
+ * GET /orders/{orderId}/allocation-suggestion
+ * Get FEFO batch suggestion (read-only, does NOT modify data)
+ */
 export const getFefoSuggestion = async (orderId) => {
   const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/allocation-suggestion`);
   return await handleResponse(response);
 };
 
 /**
- * Confirm batch allocation for an order
  * POST /orders/{orderId}/confirm-allocation
+ * Confirm batch allocation. Creates order_detail_fill records and moves order to PROCESSING.
  * @param {number} orderId
  * @param {Array<{ orderDetailId: number, batchPicks: Array<{batchId: number, quantity: number}> }>} finalAllocations
  */
@@ -427,55 +515,32 @@ export const confirmAllocation = async (orderId, finalAllocations) => {
   return await handleResponse(response);
 };
 
-// PATCH /orders/{orderId}/complete — Shipper marks order as DONE
-export const completeOrder = async (orderId) => {
-  const response = await authFetch(`${API_BASE_URL}/orders/${orderId}/complete`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const data = await handleResponse(response);
-  return data ? mapOrder(data) : data;
-};
-
 // --- Order Details API ---
 
+/** GET /order-details/order/{orderId} */
 export const getOrderDetailsByOrderId = async (orderId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-details/order/${orderId}`));
   return Array.isArray(data) ? data.map(mapOrderDetail) : data;
 };
 
-// --- Order Detail Fills API ---
-
-export const getAllOrderDetailFills = async () => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/order-detail-fills`));
-  return Array.isArray(data) ? data.map(mapOrderDetailFill) : data;
-};
-
-// DEPRECATED: These endpoints do not exist in the current backend.
-// Fill data is now part of OrderDetailResponse.
-export const getOrderDetailFillsByOrderDetailId = async (orderDetailId) => {
-  console.warn('getOrderDetailFillsByOrderDetailId is deprecated. Use order.order_details.order_detail_fills instead.');
-  return [];
-};
-
-export const getOrderDetailFillsByBatchId = async (batchId) => {
-  console.warn('getOrderDetailFillsByBatchId is deprecated.');
-  return [];
-};
-
 // --- Receipts API ---
 
+/** GET /receipts/order/{orderId} */
 export const getReceiptsByOrderId = async (orderId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/receipts/order/${orderId}`));
   return Array.isArray(data) ? data.map(mapReceipt) : data;
 };
 
+/** GET /receipts/status/{status} - status: READY | COMPLETED */
 export const getReceiptsByStatus = async (status) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/receipts/status/${status}`));
   return Array.isArray(data) ? data.map(mapReceipt) : data;
 };
 
-/** Creates a DRAFT receipt for an order */
+/**
+ * POST /receipts/order/{orderId}?note=
+ * Creates a DRAFT receipt for an order
+ */
 export const createReceipt = async (orderId, note = '') => {
   const params = note ? `?note=${encodeURIComponent(note)}` : '';
   const response = await authFetch(`${API_BASE_URL}/receipts/order/${orderId}${params}`, {
@@ -486,102 +551,110 @@ export const createReceipt = async (orderId, note = '') => {
   return data ? mapReceipt(data) : data;
 };
 
-/** Confirms receipts: marks COMPLETED and auto-deducts inventory. Takes an array of receipt IDs. */
-export const confirmReceipts = async (receiptIds) => {
-  const response = await authFetch(`${API_BASE_URL}/receipts/confirm`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(Array.isArray(receiptIds) ? receiptIds : [receiptIds]),
-  });
-  return await handleResponse(response);
-};
-
-// Keep compatibility for single ID calls
-export const confirmReceipt = (receiptId) => confirmReceipts([receiptId]);
-
-/** Update receipt status (DRAFT, COMPLETED, CANCELED) 
- * PATCH /receipts/status - body: { receiptIds: [], status: string }
+/**
+ * PATCH /receipts/status?receiptId={receiptId}&status={status}
+ * Update receipt status: READY | COMPLETED
+ * Use COMPLETED to mark export as done (triggers inventory deduction)
+ * @param {number} receiptId
+ * @param {'READY'|'COMPLETED'} status
  */
-export const updateReceiptStatus = async (receiptIds, status) => {
-  const response = await authFetch(`${API_BASE_URL}/receipts/status`, {
+export const updateReceiptStatus = async (receiptId, status) => {
+  const params = new URLSearchParams();
+  params.append('receiptId', receiptId);
+  params.append('status', status);
+  const response = await authFetch(`${API_BASE_URL}/receipts/status?${params.toString()}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      receiptIds: Array.isArray(receiptIds) ? receiptIds : [receiptIds],
-      status
-    }),
   });
   return await handleResponse(response);
 };
 
-
+/** Alias: confirm a receipt by marking it COMPLETED */
+export const confirmReceipt = (receiptId) => updateReceiptStatus(receiptId, 'COMPLETED');
 
 // --- Product API ---
 
+/** GET /products */
 export const getProducts = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/products`));
   return Array.isArray(data) ? data.map(mapProduct) : data;
 };
 
+/**
+ * GET /products/get-by-type/{productType}
+ * productType: RAW_MATERIAL | MAIN | SIDE | BEVERAGE | DESSERT | SAUCE
+ */
 export const getProductsByType = async (productType) => {
   const response = await authFetch(`${API_BASE_URL}/products/get-by-type/${productType}`);
   const data = await handleResponse(response);
   return Array.isArray(data) ? data.map(mapProduct) : data;
 };
 
+/** POST /products */
 export const createProduct = async (productData) => {
   const response = await authFetch(`${API_BASE_URL}/products`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(productData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapProduct(data) : data;
 };
 
+/** PUT /products/{productId} */
 export const updateProduct = async (productId, productData) => {
   const response = await authFetch(`${API_BASE_URL}/products/${productId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(productData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapProduct(data) : data;
 };
 
 // --- User API ---
 
+/** GET /users */
 export const getAllUsers = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/users`));
   return Array.isArray(data) ? data.map(mapUserResponse) : data;
 };
 
+/** GET /users/shippers */
 export const getAllShippers = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/users/shippers`));
   return Array.isArray(data) ? data.map(mapUserResponse) : data;
 };
 
+/** GET /users/{userId} */
 export const getUserById = async (userId) => {
   const response = await authFetch(`${API_BASE_URL}/users/${userId}`);
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapUserResponse(data) : data;
 };
 
+/** POST /users */
 export const createUser = async (userData) => {
   const response = await authFetch(`${API_BASE_URL}/users`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(userData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapUserResponse(data) : data;
 };
 
+/** PUT /users/{userId} */
 export const updateUser = async (userId, userData) => {
   const response = await authFetch(`${API_BASE_URL}/users/${userId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(userData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapUserResponse(data) : data;
 };
 
+/** DELETE /users/{userId} */
 export const deleteUser = async (userId) => {
   const response = await authFetch(`${API_BASE_URL}/users/${userId}`, {
     method: 'DELETE',
@@ -591,34 +664,41 @@ export const deleteUser = async (userId) => {
 
 // --- Stores API ---
 
+/** GET /stores */
 export const getAllStores = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/stores`));
   return Array.isArray(data) ? data.map(mapStoreResponse) : data;
 };
 
+/** GET /stores/{id} */
 export const getStoreById = async (id) => {
-  const response = await authFetch(`${API_BASE_URL}/stores/${id}`);
-  return await handleResponse(response);
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/stores/${id}`));
+  return data ? mapStoreResponse(data) : data;
 };
 
+/** POST /stores */
 export const createStore = async (storeData) => {
   const response = await authFetch(`${API_BASE_URL}/stores`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(storeData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapStoreResponse(data) : data;
 };
 
+/** PUT /stores/{id} */
 export const updateStore = async (id, storeData) => {
   const response = await authFetch(`${API_BASE_URL}/stores/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(storeData),
   });
-  return await handleResponse(response);
+  const data = await handleResponse(response);
+  return data ? mapStoreResponse(data) : data;
 };
 
+/** DELETE /stores/{id} */
 export const deleteStore = async (id) => {
   const response = await authFetch(`${API_BASE_URL}/stores/${id}`, {
     method: 'DELETE',
@@ -628,19 +708,22 @@ export const deleteStore = async (id) => {
 
 // --- Delivery API ---
 
+/** GET /deliveries */
 export const getDeliveries = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/deliveries`));
   return Array.isArray(data) ? data.map(mapDelivery) : data;
 };
 
+/** GET /deliveries/get-by-shipper/{shipperId} */
 export const getDeliveriesByShipperId = async (shipperId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/deliveries/get-by-shipper/${shipperId}`));
   return Array.isArray(data) ? data.map(mapDelivery) : data;
 };
 
 /**
+ * POST /deliveries
  * Create delivery and assign orders + shipper
- * POST /deliveries/create — body: AssignShipperRequest { shipperId, orderIds[], deliveryDate }
+ * @param {{ shipperId: number, orderIds: number[], deliveryDate: string }} deliveryData
  */
 export const createDelivery = async (deliveryData) => {
   const body = {
@@ -653,13 +736,12 @@ export const createDelivery = async (deliveryData) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await handleResponse(response);
-  return data ? mapDelivery(data) : data;
+  return await handleResponse(response);
 };
 
-/** 
- * Update delivery status (WAITING, DELIVERING, DONE, CANCEL)
+/**
  * PATCH /deliveries/{deliveryId}/status?status=...
+ * status: WAITING | DELIVERING | DONE | CANCEL
  */
 export const updateDeliveryStatus = async (deliveryId, status) => {
   const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${status}`, {
@@ -668,20 +750,15 @@ export const updateDeliveryStatus = async (deliveryId, status) => {
   return await handleResponse(response);
 };
 
-export const deleteDelivery = async (id) => {
-  const response = await authFetch(`${API_BASE_URL}/deliveries/${id}`, {
-    method: 'DELETE',
-  });
-  return await handleResponse(response);
-};
-
 // --- Inventory Transactions API ---
 
+/** GET /inventory-transactions */
 export const getAllTransactions = async () => {
   const response = await authFetch(`${API_BASE_URL}/inventory-transactions`);
   return await handleResponse(response);
 };
 
+/** POST /inventory-transactions */
 export const createTransaction = async (data) => {
   const response = await authFetch(`${API_BASE_URL}/inventory-transactions`, {
     method: 'POST',
@@ -691,11 +768,13 @@ export const createTransaction = async (data) => {
   return await handleResponse(response);
 };
 
+/** GET /inventory-transactions/product/{productId} */
 export const getTransactionsByProductId = async (productId) => {
   const response = await authFetch(`${API_BASE_URL}/inventory-transactions/product/${productId}`);
   return await handleResponse(response);
 };
 
+/** GET /inventory-transactions/batch/{batchId} */
 export const getTransactionsByBatchId = async (batchId) => {
   const response = await authFetch(`${API_BASE_URL}/inventory-transactions/batch/${batchId}`);
   return await handleResponse(response);
@@ -703,11 +782,22 @@ export const getTransactionsByBatchId = async (batchId) => {
 
 // --- Inventories API ---
 
+/** GET /inventories */
 export const getInventories = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/inventories`));
   return Array.isArray(data) ? data.map(mapInventory) : data;
 };
 
+/**
+ * GET /inventories/type/{productType}
+ * productType: RAW_MATERIAL | MAIN | SIDE | BEVERAGE | DESSERT | SAUCE
+ */
+export const getInventoryByProductType = async (productType) => {
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/inventories/type/${productType}`));
+  return Array.isArray(data) ? data.map(mapInventory) : data;
+};
+
+/** GET /inventories/get-by-id/{inventoryId} */
 export const getInventoryById = async (inventoryId) => {
   const response = await authFetch(`${API_BASE_URL}/inventories/get-by-id/${inventoryId}`);
   const data = await handleResponse(response);
@@ -716,42 +806,33 @@ export const getInventoryById = async (inventoryId) => {
 
 // --- Log Batches API ---
 
+/** GET /log-batches */
 export const getAllLogBatches = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/log-batches`));
   return Array.isArray(data) ? data.map(mapLogBatch) : data;
 };
 
+/** GET /log-batches/{batchId} */
 export const getLogBatchById = async (batchId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/log-batches/${batchId}`));
-  return mapLogBatch(data);
+  return data ? mapLogBatch(data) : data;
 };
 
+/** GET /log-batches/plan/{planId} */
 export const getLogBatchesByPlanId = async (planId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/log-batches/plan/${planId}`));
   return Array.isArray(data) ? data.map(mapLogBatch) : data;
 };
 
+/** GET /log-batches/product/{productId} */
 export const getLogBatchesByProductId = async (productId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/log-batches/product/${productId}`));
   return Array.isArray(data) ? data.map(mapLogBatch) : data;
 };
 
 /**
- * Update a log batch status
- * PATCH /log-batches/{batchId}/status?status=...
- */
-export const updateLogBatchStatus = async (batchId, status) => {
-  const finalStatus = status;
-  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${finalStatus}`, {
-    method: 'PATCH',
-  });
-  const data = await handleResponse(response);
-  return mapLogBatch(data);
-};
-
-/**
- * Get all log batches by status
  * GET /log-batches/status/{status}
+ * status: PROCESSING | WAITING_TO_CONFIRM | DONE | WAITING_TO_CANCEL | DAMAGED
  */
 export const getLogBatchesByStatus = async (status) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/log-batches/status/${status}`));
@@ -759,28 +840,34 @@ export const getLogBatchesByStatus = async (status) => {
 };
 
 /**
- * Create a log batch (Production)
+ * PATCH /log-batches/{batchId}/status?status=...
+ * status: PROCESSING | WAITING_TO_CONFIRM | DONE | WAITING_TO_CANCEL | DAMAGED
+ */
+export const updateLogBatchStatus = async (batchId, status) => {
+  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/status?status=${status}`, {
+    method: 'PATCH',
+  });
+  const data = await handleResponse(response);
+  return data ? mapLogBatch(data) : data;
+};
+
+/**
  * POST /log-batches/production
+ * Create production log batches (array)
  */
 export const createProLogBatch = async (batchData) => {
-  // Ensure we send an array of cleaned objects
   const payload = Array.isArray(batchData) ? batchData : [batchData];
-  const cleanedPayload = payload.map(item => {
-    const { expiryDate, ...rest } = item;
-    return item.expiryDate ? item : rest;
-  });
-
   const response = await authFetch(`${API_BASE_URL}/log-batches/production`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(cleanedPayload),
+    body: JSON.stringify(payload),
   });
   return await handleResponse(response);
 };
 
 /**
- * Create a log batch (Purchase)
  * POST /log-batches/purchase
+ * Create a single purchase log batch
  */
 export const createPurLogBatch = async (batchData) => {
   const response = await authFetch(`${API_BASE_URL}/log-batches/purchase`, {
@@ -789,20 +876,22 @@ export const createPurLogBatch = async (batchData) => {
     body: JSON.stringify(batchData),
   });
   const data = await handleResponse(response);
-  return mapLogBatch(data);
+  return data ? mapLogBatch(data) : data;
 };
 
-/** Alias for backward compatibility */
+/** Aliases for backward compatibility */
 export const createBatch = createProLogBatch;
 export const createPurchaseBatch = createPurLogBatch;
 
 // --- Production Plans API ---
 
+/** GET /production-plans */
 export const getProductionPlans = async () => {
   const response = await authFetch(`${API_BASE_URL}/production-plans`);
   return await handleResponse(response);
 };
 
+/** POST /production-plans */
 export const createProductionPlan = async (planData) => {
   const payload = { ...planData, status: planData.status || 'DRAFT' };
   const response = await authFetch(`${API_BASE_URL}/production-plans`, {
@@ -813,28 +902,43 @@ export const createProductionPlan = async (planData) => {
   return await handleResponse(response);
 };
 
+/** PUT /production-plans/{id} */
 export const updateProductionPlan = async (planId, planData) => {
   const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}`, {
-    method: 'PUT', // Swagger shows PUT for full update
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(planData),
   });
   return await handleResponse(response);
 };
 
+/**
+ * PATCH /production-plans/{id}/status?status=...
+ * status: DRAFT | WAITING | PROCESSING | COMPLETE_ONE_SECTION | DONE | CANCEL
+ */
 export const updateProductionPlanStatus = async (planId, status) => {
   const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}/status?status=${status}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
   });
   return await handleResponse(response);
 };
 
+/** GET /production-plans/{id} */
 export const getProductionPlanById = async (id) => {
   const response = await authFetch(`${API_BASE_URL}/production-plans/${id}`);
   return await handleResponse(response);
 };
 
+/**
+ * GET /production-plans/{id}/material-requirements
+ * Returns total raw materials required based on recipes for a plan.
+ */
+export const getMaterialRequirementsForPlan = async (planId) => {
+  const response = await authFetch(`${API_BASE_URL}/production-plans/${planId}/material-requirements`);
+  return await handleResponse(response);
+};
+
+/** GET /production-plan-details/plan/{planId} */
 export const getProductionPlanDetails = async (planId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/production-plan-details/plan/${planId}`));
   return Array.isArray(data) ? data : [];
@@ -842,27 +946,35 @@ export const getProductionPlanDetails = async (planId) => {
 
 // --- Quality Feedback API ---
 
+/** GET /feedbacks */
 export const getAllFeedbacks = async () => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/feedbacks`));
   return Array.isArray(data) ? data.map(mapFeedback) : data;
 };
 
+/**
+ * POST /feedbacks
+ * @param {{ orderId: number, rating: number, comment: string }} data
+ */
 export const createFeedback = async (data) => {
   const response = await authFetch(`${API_BASE_URL}/feedbacks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  return await handleResponse(response);
+  const result = await handleResponse(response);
+  return result ? mapFeedback(result) : result;
 };
 
 // --- Recipes API ---
 
+/** GET /recipes */
 export const getRecipes = async () => {
   const response = await authFetch(`${API_BASE_URL}/recipes`);
   return await handleResponse(response);
 };
 
+/** GET /recipes/search/{keyword} */
 export const searchRecipes = async (keyword) => {
   const response = await authFetch(`${API_BASE_URL}/recipes/search/${encodeURIComponent(keyword)}`);
   return await handleResponse(response);
@@ -870,12 +982,109 @@ export const searchRecipes = async (keyword) => {
 
 // --- Recipe Details API ---
 
+/** GET /recipe-details */
 export const getAllRecipeDetails = async () => {
   const response = await authFetch(`${API_BASE_URL}/recipe-details`);
   return await handleResponse(response);
 };
 
+/** GET /recipe-details/{id} */
+export const getRecipeDetailById = async (id) => {
+  const response = await authFetch(`${API_BASE_URL}/recipe-details/${id}`);
+  return await handleResponse(response);
+};
+
+/** GET /recipe-details/recipe/{recipeId} */
 export const getRecipeDetailsByRecipeId = async (recipeId) => {
   const response = await authFetch(`${API_BASE_URL}/recipe-details/recipe/${recipeId}`);
+  return await handleResponse(response);
+};
+
+// --- Waste Log API ---
+
+/** GET /waste-log */
+export const getAllWasteLogs = async () => {
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/waste-log`));
+  return Array.isArray(data) ? data.map(mapWasteLog) : data;
+};
+
+/**
+ * POST /waste-log?request=...
+ * @param {{ productId: number, batchId: number, orderId?: number, quantity: number, wasteType: string, note?: string }} wasteData
+ */
+export const createWasteLog = async (wasteData) => {
+  const params = new URLSearchParams();
+  // The spec shows request as a query param object
+  Object.entries(wasteData).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      params.append(key, value);
+    }
+  });
+  const response = await authFetch(`${API_BASE_URL}/waste-log?${params.toString()}`, {
+    method: 'POST',
+  });
+  const data = await handleResponse(response);
+  return data ? mapWasteLog(data) : data;
+};
+
+// --- Report API ---
+
+/**
+ * GET /reports/orders/volume?startDate={startDate}&endDate={endDate}
+ * Returns order volume by date range.
+ * @param {string} startDate - format: YYYY-MM-DD
+ * @param {string} endDate - format: YYYY-MM-DD
+ * @returns {Array<{ date: string, totalOrders: number }>}
+ */
+export const getOrderVolume = async (startDate, endDate) => {
+  const params = new URLSearchParams({ startDate, endDate });
+  const response = await authFetch(`${API_BASE_URL}/reports/orders/volume?${params.toString()}`);
+  return await handleResponse(response);
+};
+
+/**
+ * GET /reports/orders/top-products?limit={limit}
+ * Returns top ordered products sorted by quantity.
+ * @param {number} limit - default 5
+ * @returns {Array<{ productName: string, totalQuantity: number, unit: string }>}
+ */
+export const getTopOrderedProducts = async (limit = 5) => {
+  const response = await authFetch(`${API_BASE_URL}/reports/orders/top-products?limit=${limit}`);
+  return await handleResponse(response);
+};
+
+/**
+ * GET /reports/orders/revenue/by-store?month={month}&year={year}
+ * Returns internal revenue by store for a specific month and year.
+ * @param {number} month
+ * @param {number} year
+ * @returns {Array<{ storeName: string, totalRevenue: number }>}
+ */
+export const getRevenueByStore = async (month, year) => {
+  const params = new URLSearchParams({ month, year });
+  const response = await authFetch(`${API_BASE_URL}/reports/orders/revenue/by-store?${params.toString()}`);
+  return await handleResponse(response);
+};
+
+/**
+ * GET /reports/orders/live-status
+ * Returns live order status counts for today.
+ * @returns {Object<string, number>} - e.g. { WAITING: 3, PROCESSING: 5, ... }
+ */
+export const getLiveOrderStatusToday = async () => {
+  const response = await authFetch(`${API_BASE_URL}/reports/orders/live-status`);
+  return await handleResponse(response);
+};
+
+/**
+ * GET /reports/orders/damaged?page={page}&size={size}
+ * Returns paginated list of canceled or damaged orders.
+ * @param {number} page - default 0
+ * @param {number} size - default 10
+ * @returns {{ totalElements, totalPages, content: Array<IssueOrderResponse>, ... }}
+ */
+export const getDamagedOrCanceledOrders = async (page = 0, size = 10) => {
+  const params = new URLSearchParams({ page, size });
+  const response = await authFetch(`${API_BASE_URL}/reports/orders/damaged?${params.toString()}`);
   return await handleResponse(response);
 };
