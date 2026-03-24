@@ -80,6 +80,7 @@ const menuByRole = {
   6: [
     { title: 'Chuyến hàng của tôi', url: '/shipper', icon: Truck },
     { title: 'Bản đồ giao hàng', url: '/shipper/map', icon: MapPin },
+    { title: 'Lịch sử giao hàng', url: '/shipper/history', icon: History },
   ],
   // Warehouse (Role 7)
   7: [

@@ -39,14 +39,23 @@ export default function Deliveries() {
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
+    // 1. If backend has assigned a terminal or active status, use it
+    if (['DELIVERING', 'DONE', 'DAMAGED', 'CANCEL'].includes(delivery.status)) {
+      return delivery.status;
+    }
+
     if (!delivery.orders || delivery.orders.length === 0) return 'WAITING';
-    const hasWaiting = delivery.orders.some(o => o.status === 'WAITING');
-    const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
-    const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
-    const allFinished = delivery.orders.every(o => ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(o.status));
+    
+    // 2. Otherwise calculate based on order statuses
+    const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING' || o.status === 'PARTIAL_DELIVERED');
+    const allFinished = delivery.orders.every(o => ['DONE', 'DAMAGED', 'CANCELED'].includes(o.status));
+    
     if (allFinished) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
+    
+    const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING' || o.status === 'DISPATCHED' || o.status === 'READY');
     if (hasProcessing) return 'PROCESSING';
+    
     return 'WAITING';
   };
 
@@ -59,7 +68,7 @@ export default function Deliveries() {
 
   const waitingDeliveries = enrichedDeliveries.filter((d) => d.status === 'WAITING' || d.status === 'PROCESSING');
   const processingDeliveries = enrichedDeliveries.filter((d) => d.status === 'DELIVERING');
-  const doneDeliveries = enrichedDeliveries.filter((d) => d.status === 'DONE');
+  const doneDeliveries = enrichedDeliveries.filter((d) => d.status === 'DONE' || d.status === 'DAMAGED');
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';

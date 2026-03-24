@@ -26,6 +26,7 @@ import Deliveries from "./pages/coordinator/Deliveries";
 // Manager pages
 import ManagerDashboard from "./pages/manager/ManagerDashboard";
 import ProductionPlanning from "./pages/manager/ProductionPlanning";
+import ManagerReports from "./pages/manager/ManagerReports";
 
 // Kitchen pages
 import KitchenDashboard from "./pages/kitchen/Dashboard";
@@ -38,6 +39,7 @@ import RecipeViewer from "./pages/kitchen/RecipeViewer";
 // Shipper pages
 import MyTrips from "./pages/shipper/MyTrips";
 import DeliveryMap from "./pages/shipper/DeliveryMap";
+import ShipperHistory from "./pages/shipper/History";
 
 // Admin pages
 import AdminDashboard from "./pages/admin/Dashboard";
@@ -100,6 +102,7 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.MANAGER, ROLE_ID.ADMIN]}><Outlet /></ProtectedRoute>}>
                   <Route path="/manager" element={<ManagerDashboard />} />
                   <Route path="/manager/planning" element={<ProductionPlanning />} />
+                  <Route path="/manager/reports" element={<ManagerReports />} />
                 </Route>
 
                 {/* Kitchen routes */}
@@ -114,6 +117,7 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.SHIPPER]}><Outlet /></ProtectedRoute>}>
                   <Route path="/shipper" element={<MyTrips />} />
                   <Route path="/shipper/map" element={<DeliveryMap />} />
+                  <Route path="/shipper/history" element={<ShipperHistory />} />
                 </Route>
 
                 {/* Warehouse routes (ID 7) */}

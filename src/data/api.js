@@ -157,9 +157,11 @@ function mapReceipt(r) {
     receipt_id: r.receiptId,
     receipt_code: r.receiptCode,
     order_id: r.orderId,
+    shipper_id: r.shipperId, // Added for new schema
     export_date: r.exportDate,
     status: r.status,
     note: r.note,
+    type: r.type, // IMPORT/EXPORT
     receipt_details: Array.isArray(r.receiptDetails) ? r.receiptDetails.map(mapReceiptDetail) : [],
     inventory_transactions: Array.isArray(r.inventoryTransactions) ? r.inventoryTransactions : [],
   };
@@ -457,10 +459,16 @@ export const createAdditionalOrder = async (parentOrderId, orderData) => {
   const storeId = orderData.storeId ?? orderData.store_id;
   const comment = orderData.comment ?? '';
   const type = orderData.type ?? 'SUPPLEMENT';
+  // Ensure orderDetails is not empty for supplement orders
   const orderDetails = (orderData.orderDetails ?? []).map((od) => ({
     productId: od.productId ?? od.product_id,
     quantity: Number(od.quantity),
-  }));
+  })).filter(od => od.quantity > 0); // Filter out 0 quantity items
+
+  if (orderDetails.length === 0) {
+    throw new Error('Đơn bổ sung phải có ít nhất một sản phẩm với số lượng lớn hơn 0.');
+  }
+
   const response = await authFetch(`${API_BASE_URL}/orders/${parentOrderId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -484,9 +492,13 @@ export const updateOrderStatus = async (orderId, status, note = '') => {
   params.append('status', status);
   if (note) params.append('note', note);
 
-  // Simplified: remove path variable that was likely causing 500
-  const response = await authFetch(`${API_BASE_URL}/orders/update-status?${params.toString()}`, {
+  // The spec has note as path variable. To avoid 500/400 errors when note contains special chars
+  // we use an extremely sanitized version for the path, while the full note stays in query params.
+  const pathNote = note ? encodeURIComponent(note.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10) || 'update') : 'none';
+  const response = await authFetch(`${API_BASE_URL}/orders/update-status/${pathNote}?${params.toString()}`, {
     method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}) // Added empty body for some backends that require it
   });
   return await handleResponse(response);
 };
@@ -531,7 +543,7 @@ export const getReceiptsByOrderId = async (orderId) => {
   return Array.isArray(data) ? data.map(mapReceipt) : data;
 };
 
-/** GET /receipts/status/{status} - status: READY | COMPLETED */
+/** GET /receipts/status/{status} - status: DRAFT | READY | COMPLETED */
 export const getReceiptsByStatus = async (status) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/receipts/status/${status}`));
   return Array.isArray(data) ? data.map(mapReceipt) : data;
@@ -553,10 +565,9 @@ export const createReceipt = async (orderId, note = '') => {
 
 /**
  * PATCH /receipts/status?receiptId={receiptId}&status={status}
- * Update receipt status: READY | COMPLETED
- * Use COMPLETED to mark export as done (triggers inventory deduction)
+ * Update receipt status: DRAFT | READY | COMPLETED
  * @param {number} receiptId
- * @param {'READY'|'COMPLETED'} status
+ * @param {'DRAFT'|'READY'|'COMPLETED'} status
  */
 export const updateReceiptStatus = async (receiptId, status) => {
   const params = new URLSearchParams();
@@ -568,8 +579,19 @@ export const updateReceiptStatus = async (receiptId, status) => {
   return await handleResponse(response);
 };
 
-/** Alias: confirm a receipt by marking it COMPLETED */
-export const confirmReceipt = (receiptId) => updateReceiptStatus(receiptId, 'COMPLETED');
+/** Alias: confirm a receipt by marking it READY */
+export const confirmReceipt = (receiptId) => updateReceiptStatus(receiptId, 'READY');
+
+/**
+ * PATCH /receipts/{receiptId}/assign-shipper?shipperId={shipperId}
+ * Assigns a shipper to a receipt for delivery.
+ */
+export const assignShipperToReceipt = async (receiptId, shipperId) => {
+  const response = await authFetch(`${API_BASE_URL}/receipts/${receiptId}/assign-shipper?shipperId=${shipperId}`, {
+    method: 'PATCH',
+  });
+  return await handleResponse(response);
+};
 
 // --- Product API ---
 
@@ -849,6 +871,20 @@ export const updateLogBatchStatus = async (batchId, status) => {
   });
   const data = await handleResponse(response);
   return data ? mapLogBatch(data) : data;
+};
+
+/**
+ * POST /log-batches/{batchId}/expire
+ * Marks a batch as expired (DAMAGED), deducts inventory, and auto-creates a WASTE report for Manager.
+ * @param {number} batchId
+ */
+export const expireBatch = async (batchId) => {
+  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/expire`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return await handleResponse(response);
 };
 
 /**

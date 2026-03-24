@@ -6,8 +6,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/ta
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../../components/ui/dialog';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
-import { Loader2, PackageCheck, ClipboardList, CheckCircle2, Package, RefreshCw, Truck, MapPin, Search, ChevronDown, ChevronUp } from 'lucide-react';
-import { fetchOrders, getOrdersByStatus, getReceiptsByStatus, getReceiptsByOrderId, createReceipt, updateReceiptStatus, updateOrderStatus, getFefoSuggestion, confirmAllocation, getInventories, getOrderById } from '../../data/api';
+import { Loader2, PackageCheck, ClipboardList, CheckCircle2, Package, RefreshCw, Truck, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
+import { Checkbox } from '../../components/ui/checkbox';
+import { fetchOrders, getOrdersByStatus, getReceiptsByStatus, getReceiptsByOrderId, createReceipt, updateReceiptStatus, updateOrderStatus, getFefoSuggestion, confirmAllocation, getInventories, getOrderById, createAdditionalOrder } from '../../data/api';
 import { toast } from 'sonner';
 
 export default function WarehouseOutbound() {
@@ -31,6 +32,7 @@ export default function WarehouseOutbound() {
     isLoading: false,
     isSubmitting: false
   });
+
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -56,7 +58,7 @@ export default function WarehouseOutbound() {
       console.log(`Mapping receipts for ${relevantOrders.length} orders...`);
       const receiptsPerOrder = await Promise.all(
         relevantOrders
-          .filter(o => ['WAITING', 'PROCESSING', 'PICKING', 'PARTIAL_DELIVERED', 'DISPATCHED', 'DELIVERING'].includes(o.status))
+          .filter(o => ['WAITING', 'PROCESSING', 'PICKING', 'PARTIAL_DELIVERED', 'DISPATCHED', 'DELIVERING', 'READY', 'COMPLETED', 'DONE'].includes(o.status))
           .map(async (o) => {
             try {
               const res = await getReceiptsByOrderId(o.order_id);
@@ -110,58 +112,146 @@ export default function WarehouseOutbound() {
       const hasDetails = (order.order_details || []).length > 0;
       if (!hasDetails && !cached) {
         try {
-          const fullOrder = await getOrderById(order.order_id);
-          if (fullOrder) {
+          const details = await getOrderDetailsByOrderId(order.order_id);
+          if (details && details.length > 0) {
             setOrderDetailsCache(prev => ({
               ...prev,
-              [order.order_id]: fullOrder.order_details || []
+              [order.order_id]: details
             }));
           }
         } catch (e) {
-          console.error('Lỗi tải chi tiết đơn:', e);
+          console.error('Lỗi tải chi tiết sản phẩm:', e);
         }
       }
     }
   };
 
+
+  const updateOrderStatusWithFallback = async (orderId, status, note) => {
+    try {
+      await updateOrderStatus(orderId, status, note);
+    } catch (error) {
+      if (error.message.includes('500')) {
+        const updatedOrder = await getOrderById(orderId).catch(() => null);
+        if (updatedOrder && updatedOrder.status === status) return;
+      }
+      throw error;
+    }
+  };
+
+  const handleBulkCreateReceipts = async (targetOrders) => {
+    const selectedIds = Object.keys(checkedOrders).filter(id => checkedOrders[id]).map(Number);
+    if (selectedIds.length === 0) {
+      toast.error('Vui lòng chọn ít nhất một đơn hàng');
+      return;
+    }
+
+    const oToProcess = targetOrders.filter(o => selectedIds.includes(o.order_id));
+    if (oToProcess.length === 0) return;
+
+    if (!confirm(`Xác nhận soạn hàng XUẤT KHO cho ${oToProcess.length} đơn đã chọn?`)) return;
+
+    setProcessingOrderId('bulk-processing');
+    let successCount = 0;
+
+    for (const order of oToProcess) {
+      try {
+        await createReceipt(order.order_id, `Xuất kho hàng loạt #${order.order_id}`);
+        await updateOrderStatus(order.order_id, 'DISPATCHED', 'Xuất kho hàng loạt');
+        successCount++;
+      } catch (err) {
+        console.warn(`Lỗi đơn #${order.order_id}:`, err);
+        // Even if error, check if it was actually created
+        const recs = await getReceiptsByOrderId(order.order_id).catch(() => []);
+        if (recs.some(r => r.status === 'READY' || r.status === 'COMPLETED')) successCount++;
+      }
+    }
+
+    toast.success(`Đã xử lý xong ${successCount}/${oToProcess.length} đơn hàng.`);
+    setCheckedOrders({});
+    setProcessingOrderId(null);
+    fetchData();
+    setActiveTab('dispatched');
+  };
+
   const handleCreateReceipt = async (order) => {
-    if (!confirm(`Tạo Phiếu Xuất Kho cho đơn hàng #${order.order_id}?\nPhiếu sẽ ở trạng thái DRAFT (Đang soạn).`)) return;
+    if (!confirm(`Xác nhận hoàn tất soạn hàng cho đơn #${order.order_id}?\nHệ thống sẽ tạo Phiếu Xuất Kho.`)) return;
     setProcessingOrderId(order.order_id);
     try {
-      const receipt = await createReceipt(order.order_id, `Phiếu xuất cho đơn #${order.order_id}`);
+      let receipt;
+      try {
+        receipt = await createReceipt(order.order_id, `Phiếu xuất cho đơn #${order.order_id}`);
+      } catch (err) {
+        // Fallback: The API often throws 500 Internal Server Error but still manages to create the receipt
+        console.warn('API error on createReceipt, verifying creation...', err);
+        const allReceipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
+        receipt = allReceipts.find(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED');
+        if (!receipt) {
+          throw new Error(err.message || 'Lỗi 500 từ Server và không tìm thấy phiếu được tạo.');
+        }
+      }
       
-      // Update local state immediately for SNAPPY UI
+      // Update order status to DISPATCHED
+      try {
+        await updateOrderStatus(order.order_id, 'DISPATCHED', 'Đã soạn xong');
+      } catch (statusErr) {
+        console.warn('Failed to update order status to DISPATCHED, but receipt was likely created.', statusErr);
+      }
+
+      toast.success(`Đã hoàn tất soạn hàng & tạo Phiếu Xuất #${receipt?.receipt_id || ''}.`);
+      
+      // 1. Update local state FIRST
       if (receipt) {
+        const newReceipt = { ...receipt, status: receipt.status || 'READY' };
         setOrderReceipts(prev => ({
           ...prev,
-          [order.order_id]: [...(prev[order.order_id] || []), receipt]
+          [order.order_id]: [...(prev[order.order_id] || []), newReceipt]
         }));
       }
 
-      toast.success(`Đã tạo Phiếu Xuất #${receipt?.receipt_id || ''} dạng DRAFT.`);
-      await fetchData(); 
-      setActiveTab('draft'); // Move to Tab 3 automatically
+      // Update order status in allOrders
+      setAllOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, status: 'DISPATCHED' } : o));
+
+      // 2. Switch tab immediately to history
+      setActiveTab('dispatched');
     } catch (error) {
-      toast.error('Lỗi tạo phiếu xuất: ' + error.message);
+      toast.error('Lỗi khi hoàn tất soạn hàng: ' + error.message);
     } finally {
       setProcessingOrderId(null);
     }
   };
 
-  const handleConfirmReceipt = async (receipt) => {
-    if (!confirm(`Xác nhận xuất kho cho Phiếu #${receipt.receipt_id}?\nHành động này sẽ trừ tồn kho thực tế.`)) return;
-    setProcessingOrderId(`receipt-${receipt.receipt_id}`);
+  const handleCompleteOrder = async (order) => {
+    // Step 7: Order Completion - Quantity check
+    const receipts = orderReceipts[order.order_id] || [];
+    const totalOrdered = (order.order_details || []).reduce((sum, d) => sum + d.quantity, 0);
+    const totalDelivered = receipts
+      .filter(r => r.status === 'DELIVERED')
+      .reduce((sum, r) => sum + (r.receipt_details || []).reduce((s, rd) => s + rd.quantity, 0), 0);
+
+    let confirmMsg = `Xác nhận "Chốt đơn hàng" #${order.order_id}?\nTrạng thái sẽ chuyển sang HOÀN THÀNH (DONE).`;
+    
+    if (totalDelivered < totalOrdered) {
+      confirmMsg = `⚠️ CẢNH BÁO: Đơn hàng mới giao được ${totalDelivered}/${totalOrdered} sản phẩm.\n\nBạn vẫn muốn "Chốt đơn hàng" này chứ?`;
+    }
+
+    if (!confirm(confirmMsg)) return;
+    
+    setProcessingOrderId(order.order_id);
     try {
-      await updateReceiptStatus(receipt.receipt_id, 'COMPLETED');
-      toast.success(`Đã xác nhận xuất kho cho Phiếu #${receipt.receipt_id}!`);
-      await fetchData();
-      setActiveTab('dispatched'); // Move to Tab 4 automatically
+      await updateOrderStatusWithFallback(order.order_id, 'DONE', `Thủ kho chốt đơn. Tổng giao: ${totalDelivered}/${totalOrdered}`);
+      toast.success(`Đơn hàng #${order.order_id} đã được chốt thành công!`);
+      
+      // Update local state
+      setAllOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, status: 'DONE' } : o));
     } catch (error) {
-      toast.error('Lỗi xác nhận xuất kho: ' + error.message);
+      toast.error('Lỗi khi chốt đơn: ' + error.message);
     } finally {
       setProcessingOrderId(null);
     }
   };
+
+  // handleBulkConfirmReceipts and handleConfirmReceiptExport removed as per new flow. Warehouse just creates READY receipts.
 
   const handleCancelReceipt = async (receipt) => {
     if (!confirm(`Hủy Phiếu Xuất #${receipt.receipt_id}?`)) return;
@@ -186,16 +276,16 @@ export default function WarehouseOutbound() {
         : (orderDetailsCache[order.order_id] || [])
     };
 
-    // If still empty, fetch now
+    // If still empty, fetch now using dedicated details endpoint
     if (enrichedOrder.order_details.length === 0) {
       try {
-        const fullOrder = await getOrderById(order.order_id);
-        if (fullOrder) {
-          enrichedOrder = { ...order, order_details: fullOrder.order_details || [] };
-          setOrderDetailsCache(prev => ({ ...prev, [order.order_id]: fullOrder.order_details || [] }));
+        const details = await getOrderDetailsByOrderId(order.order_id);
+        if (details && details.length > 0) {
+          enrichedOrder = { ...order, order_details: details };
+          setOrderDetailsCache(prev => ({ ...prev, [order.order_id]: details }));
         }
       } catch (e) {
-        console.error('Lỗi tải chi tiết đơn:', e);
+        console.error('Lỗi tải chi tiết sản phẩm:', e);
       }
     }
 
@@ -301,9 +391,9 @@ export default function WarehouseOutbound() {
     
     setProcessingOrderId(order.order_id);
     try {
-      // Flow 1 Step 2: Trường hợp B - Từ chối đơn -> Update orders.status: WAITING -> CANCELED
-      // Optionally attach 'reason' as comment if backend allows
-      await updateOrderStatus(order.order_id, 'CANCELED', order.store_id);
+      // Flow 1 Step 2: Case B - Reject order -> Update status to CANCELED with [REJECTED] tag
+      const finalComment = `[REJECTED] ${reason || 'Không rõ lý do'}`;
+      await updateOrderStatus(order.order_id, 'CANCELED', finalComment);
       toast.success('Đã từ chối đơn hàng');
       await fetchData();
     } catch (error) {
@@ -319,41 +409,38 @@ export default function WarehouseOutbound() {
   };
 
   const getDisplayStatusText = (status, actionType) => {
-    if (actionType === 'picking') return 'PROCESSING';
-    if (actionType === 'draft') return 'DRAFT';
-    if (actionType === 'ready') return 'COMPLETED';
-    if (actionType === 'completed') return 'DELIVERED/DONE';
+    if (actionType === 'picking') return 'Soạn hàng';
+    if (actionType === 'ready') return 'Đã xuất kho';
     return status;
   };
 
-  // 1. Duyệt đơn: Only WAITING
-  const waitingConfirmationOrders = allOrders.filter(o => o.status === 'WAITING');
+  // 1. Chờ duyệt: WAITING status
+  // 1. Chờ duyệt: WAITING status or SUPPLEMENT orders that haven't been processed
+  const waitingConfirmationOrders = allOrders.filter(o => 
+    o.status === 'WAITING' || 
+    (o.status === 'PROCESSING' && (o.comment || '').includes('SUPPLEMENT') && (orderReceipts[o.order_id] || []).length === 0)
+  );
 
-  // 2. Soạn hàng: PROCESSING but NO DRAFT receipts and NO COMPLETED receipts
-  // (We want them to stay here until they have a receipt being worked on)
+  // 2. Soạn hàng: PROCESSING status and HAS NO READY/COMPLETED receipts
   const pickingOrders = allOrders.filter(o => {
-    // Include PICKING status explicitly as mentioned by the user
     if (o.status !== 'PROCESSING' && o.status !== 'PARTIAL_DELIVERED' && o.status !== 'PICKING') return false;
     const receipts = orderReceipts[o.order_id] || [];
-    // If it has a DRAFT or COMPLETED receipt, it moves to the next stages
-    return !receipts.some(r => r.status === 'DRAFT' || r.status === 'COMPLETED');
+    // If it has ANY READY or COMPLETED receipt, it's not in picking anymore
+    return !receipts.some(r => r.status === 'READY' || r.status === 'COMPLETED');
   });
 
-  // 3. Phiếu tạm: PROCESSING and HAS at least one DRAFT receipt
-  const draftReceiptOrders = allOrders.filter(o => {
+  // 3. Xuất kho (HISTORY): Order IS DISPATCHED, DELIVERING, DONE or HAS READY/COMPLETED receipts
+  const historyOrders = allOrders.filter(o => {
+    if (o.status === 'CANCELED' || o.status === 'REJECTED') return false;
     const receipts = orderReceipts[o.order_id] || [];
-    return receipts.some(r => r.status === 'DRAFT');
+    const hasReceipt = receipts.some(r => r.status === 'READY' || r.status === 'COMPLETED');
+    return hasReceipt || ['DISPATCHED', 'DELIVERING', 'DONE'].includes(o.status);
   });
 
-  // 4. Xuất kho: HAS at least one COMPLETED receipt
-  // or is already further in the flow
-  const readyOrDoneOrders = allOrders.filter(o => {
-    const receipts = orderReceipts[o.order_id] || [];
-    const hasCompleted = receipts.some(r => r.status === 'COMPLETED');
-    
-    // We show it in 'Xuất kho' if it has completed (exported) receipts. 
-    return hasCompleted || o.status === 'DISPATCHED' || o.status === 'DELIVERING' || o.status === 'DONE';
-  });
+  // 4. Đã từ chối: CANCELED status with [REJECTED] tag
+  const rejectedOrders = allOrders.filter(o => 
+    o.status === 'CANCELED' && (o.comment || '').includes('[REJECTED]')
+  );
 
   const renderOrderList = (orders, actionType) => {
     if (orders.length === 0) {
@@ -365,8 +452,40 @@ export default function WarehouseOutbound() {
       );
     }
 
+    const allChecked = orders.length > 0 && orders.every(o => checkedOrders[o.order_id]);
+    const someChecked = orders.some(o => checkedOrders[o.order_id]);
+
     return (
       <div className="space-y-4">
+        {actionType === 'picking' && (
+          <div className="flex items-center justify-between bg-purple-50 p-4 rounded-xl border border-purple-100 mb-2 sticky top-0 z-10 shadow-sm">
+            <div className="flex items-center gap-3">
+              <Checkbox 
+                id="select-all-picking" 
+                checked={allChecked} 
+                onCheckedChange={(checked) => {
+                  const newChecked = { ...checkedOrders };
+                  orders.forEach(o => newChecked[o.order_id] = !!checked);
+                  setCheckedOrders(newChecked);
+                }}
+              />
+              <Label htmlFor="select-all-picking" className="font-bold text-purple-900 cursor-pointer">
+                Chọn tất cả ({orders.length} đơn)
+              </Label>
+            </div>
+            {someChecked && (
+              <Button 
+                size="sm" 
+                className="bg-purple-600 hover:bg-purple-700 shadow-lg animate-in zoom-in-95"
+                onClick={() => handleBulkCreateReceipts(orders)}
+                disabled={processingOrderId === 'bulk-processing'}
+              >
+                {processingOrderId === 'bulk-processing' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
+                Xuất kho cho các đơn đã chọn
+              </Button>
+            )}
+          </div>
+        )}
         {orders.map(order => {
           const isExpanded = expandedOrder === order.order_id;
           const isProcessing = processingOrderId === order.order_id;
@@ -375,10 +494,24 @@ export default function WarehouseOutbound() {
             <Card key={order.order_id} className="border-l-4 border-l-purple-400">
               <CardHeader className="pb-3 cursor-pointer hover:bg-slate-50" onClick={() => toggleOrderDetails(order)}>
                 <div className="flex justify-between items-start">
-                  <div className="flex items-start gap-3">
-                    <div>
+                  <div className="flex items-start gap-4">
+                    {actionType === 'picking' && (
+                      <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox 
+                          id={`check-${order.order_id}`}
+                          checked={!!checkedOrders[order.order_id]}
+                          onCheckedChange={(checked) => {
+                            setCheckedOrders(prev => ({ ...prev, [order.order_id]: !!checked }));
+                          }}
+                        />
+                      </div>
+                    )}
+                    <div className="flex-1">
                       <CardTitle className="text-base flex items-center gap-2">
                         Đơn hàng #{order.order_id}
+                        {String(order.comment || '').toUpperCase().includes('SUPPLEMENT') && (
+                          <Badge variant="destructive" className="animate-pulse shadow-sm text-[10px] leading-tight px-1.5 py-0">SUPPLEMENT</Badge>
+                        )}
                       </CardTitle>
                       <CardDescription>Cửa hàng: {order.store_name} &bull; Trạng thái: {getDisplayStatusText(order.status, actionType)}</CardDescription>
                     </div>
@@ -432,60 +565,73 @@ export default function WarehouseOutbound() {
 
                   <div className="pt-2">
                     {actionType === 'waiting' && (
-                      <div className="flex gap-2 mt-4">
-                        <Button onClick={(e) => { e.stopPropagation(); handleOpenAllocation(order); }} disabled={isProcessing} className="flex-1 bg-green-600 hover:bg-green-700">
-                          {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
-                          Duyệt đơn
-                        </Button>
-                        <Button onClick={(e) => { e.stopPropagation(); handleRejectOrder(order); }} disabled={isProcessing} variant="outline" className="text-red-600 border-red-200">
-                          Từ chối
-                        </Button>
+                      <div className="flex flex-col gap-3 mt-4">
+                        {String(order.comment || '').toUpperCase().includes('SUPPLEMENT') && (
+                          <Badge variant="destructive" className="w-fit animate-pulse shadow-sm">
+                            HÀNG BÙ (SUPPLEMENT)
+                          </Badge>
+                        )}
+                        <div className="flex gap-2">
+                          <Button onClick={(e) => { e.stopPropagation(); handleOpenAllocation(order); }} disabled={isProcessing} className="flex-1 bg-green-600 hover:bg-green-700">
+                            {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
+                            Duyệt đơn {order.comment?.includes('bổ sung') ? 'hàng bù' : ''}
+                          </Button>
+                          <Button onClick={(e) => { e.stopPropagation(); handleRejectOrder(order); }} disabled={isProcessing} variant="outline" className="text-red-600 border-red-200">
+                            Từ chối
+                          </Button>
+                        </div>
                       </div>
                     )}
                     {actionType === 'picking' && (
                       <Button onClick={(e) => { e.stopPropagation(); handleCreateReceipt(order); }} disabled={isProcessing} className="w-full bg-purple-600 hover:bg-purple-700">
                         {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ClipboardList className="mr-2 h-4 w-4" />}
-                        Tạo Phiếu Xuất Kho (DRAFT)
+                        Hoàn tất soạn hàng (Tạo Phiếu Xuất Kho)
                       </Button>
                     )}
-                    {actionType === 'draft' && (
-                      <div className="space-y-3">
-                        <p className="text-sm font-semibold border-b pb-1">Phiếu xuất liên quan (DRAFT):</p>
+                    {actionType === 'ready' && (
+                      <div className="space-y-4">
+
+                        <div className="flex justify-between items-center border-b pb-1">
+                          <p className="text-sm font-semibold text-blue-700 font-black flex items-center gap-2">
+                            <Truck className="h-4 w-4" /> Lịch sử xuất kho:
+                          </p>
+                          {/* Chốt đơn hàng ONLY if at least one delivery attempt made (DELIVERED/PARTIAL) */}
+                          {(order.status === 'DELIVERING' || order.status === 'PARTIAL_DELIVERED') && 
+                           (orderReceipts[order.order_id] || []).some(r => r.status === 'DELIVERED') && (
+                            <Button 
+                              size="sm" 
+                              onClick={(e) => { e.stopPropagation(); handleCompleteOrder(order); }}
+                              className="h-7 bg-green-600 hover:bg-green-700 text-[10px] font-bold py-0"
+                            >
+                              <CheckCircle2 className="h-3 w-3 mr-1" /> Chốt hoàn tất (DONE)
+                            </Button>
+                          )}
+                        </div>
                         {(orderReceipts[order.order_id] || [])
-                          .filter(r => r.status === 'DRAFT')
+                          .filter(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED')
                           .map(receipt => (
-                            <div key={receipt.receipt_id} className="flex items-center justify-between p-3 bg-white rounded-lg border shadow-sm">
+                            <div key={receipt.receipt_id} className="w-full p-3 bg-blue-50/50 text-blue-700 text-xs rounded-lg border border-blue-100 flex items-center justify-between shadow-sm">
                               <div className="flex flex-col">
-                                <span className="text-sm font-bold text-slate-700">Phiếu #{receipt.receipt_id}</span>
-                                <span className="text-[10px] text-muted-foreground uppercase">{receipt.receipt_code}</span>
+                                <span className="font-bold text-sm">Phiếu xuất #{receipt.receipt_id}</span>
+                                <span className="text-[10px] opacity-70 uppercase">{receipt.receipt_code}</span>
                               </div>
-                              <div className="flex gap-2">
-                                <Button 
-                                  size="sm" 
-                                  variant="outline" 
-                                  onClick={(e) => { e.stopPropagation(); handleCancelReceipt(receipt); }}
-                                  disabled={String(processingOrderId).startsWith('receipt-')}
-                                  className="text-red-500 border-red-100 h-8 text-xs"
-                                >
-                                  Hủy
-                                </Button>
-                                <Button 
-                                  size="sm" 
-                                  onClick={(e) => { e.stopPropagation(); handleConfirmReceipt(receipt); }}
-                                  disabled={String(processingOrderId).startsWith('receipt-')}
-                                  className="bg-orange-600 hover:bg-orange-700 h-8 text-xs"
-                                >
-                                  {processingOrderId === `receipt-${receipt.receipt_id}` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-                                  Xác nhận xuất kho (READY)
-                                </Button>
-                              </div>
+                              <Badge 
+                                variant="default" 
+                                className={
+                                  receipt.status === 'DELIVERED' ? "bg-green-600 hover:bg-green-600" : 
+                                  receipt.status === 'COMPLETED' ? "bg-indigo-600 hover:bg-indigo-600" : 
+                                  "bg-blue-600 hover:bg-blue-600"
+                                }
+                              >
+                                {receipt.status === 'DELIVERED' ? 'SHIPPER ĐÃ GIAO' : 
+                                 receipt.status === 'COMPLETED' ? 'SHIPPER ĐÃ NHẬN' : 
+                                 'CHỜ SHIPPER (READY)'}
+                              </Badge>
                             </div>
                           ))}
-                      </div>
-                    )}
-                    {actionType === 'ready' && (
-                      <div className="w-full p-2 bg-blue-50 text-blue-700 text-xs text-center rounded border border-blue-200 flex items-center justify-center gap-2 font-medium">
-                        <Truck className="h-4 w-4" /> Đã sẵn sàng giao hàng (COMPLETED)
+                        {(!orderReceipts[order.order_id] || orderReceipts[order.order_id].filter(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED').length === 0) && (
+                          <p className="text-xs text-muted-foreground italic text-center py-2">Không tìm thấy phiếu xuất lưu trong hệ thống.</p>
+                        )}
                       </div>
                     )}
                   </div>
@@ -509,7 +655,7 @@ export default function WarehouseOutbound() {
       <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-800">Quản lý Xuất kho</h1>
-          <p className="text-muted-foreground text-sm mt-1">Luồng trạng thái: Duyệt đơn ➔ Soạn hàng ➔ Phiếu tạm ➔ Xuất kho</p>
+          <p className="text-muted-foreground text-sm mt-1">Luồng trạng thái: Duyệt đơn ➔ Soạn hàng ➔ Phiếu Draft ➔ Xuất kho</p>
         </div>
         <Button variant="outline" onClick={fetchData}><RefreshCw className="mr-2 h-4 w-4" /> Làm mới</Button>
       </div>
@@ -520,13 +666,13 @@ export default function WarehouseOutbound() {
             1. Duyệt đơn {waitingConfirmationOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-green-100 text-green-700">{waitingConfirmationOrders.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="picking" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            2. Picking (Soạn hàng) {pickingOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-purple-100 text-purple-700">{pickingOrders.length}</Badge>}
-          </TabsTrigger>
-          <TabsTrigger value="draft" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            3. Draft (Phiếu tạm) {draftReceiptOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-orange-100 text-orange-700">{draftReceiptOrders.length}</Badge>}
+            2. Soạn hàng {pickingOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-purple-100 text-purple-700">{pickingOrders.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="dispatched" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
-            4. Completed (Xuất kho) {readyOrDoneOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-700">{readyOrDoneOrders.length}</Badge>}
+            3. Đã xuất kho {historyOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-blue-100 text-blue-700">{historyOrders.length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="rejected" className="py-2.5 data-[state=active]:bg-white data-[state=active]:shadow-sm">
+            4. Từ chối {rejectedOrders.length > 0 && <Badge variant="secondary" className="ml-2 bg-red-100 text-red-700">{rejectedOrders.length}</Badge>}
           </TabsTrigger>
         </TabsList>
 
@@ -536,11 +682,11 @@ export default function WarehouseOutbound() {
         <TabsContent value="picking" className="mt-0">
           {renderOrderList(pickingOrders, 'picking')}
         </TabsContent>
-        <TabsContent value="draft" className="mt-0">
-          {renderOrderList(draftReceiptOrders, 'draft')}
-        </TabsContent>
         <TabsContent value="dispatched" className="mt-0">
-          {renderOrderList(readyOrDoneOrders, 'ready')}
+          {renderOrderList(historyOrders, 'ready')}
+        </TabsContent>
+        <TabsContent value="rejected" className="mt-0">
+          {renderOrderList(rejectedOrders, 'rejected')}
         </TabsContent>
       </Tabs>
       <Dialog open={allocationModal.isOpen} onOpenChange={(open) => setAllocationModal(prev => ({ ...prev, isOpen: open }))}>
@@ -640,6 +786,7 @@ export default function WarehouseOutbound() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }

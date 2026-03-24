@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { fetchOrders, getInventories, getProducts } from '../../data/api';
+import { useNavigate } from 'react-router-dom';
+import { fetchOrders, getInventories, getProducts, getLogBatchesByStatus, getProductionPlans } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -10,14 +11,20 @@ import {
   PackageCheck,
   ArrowDownToLine,
   Trash2,
+  BarChart3,
+  ArrowRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from 'recharts';
 
 export default function ManagerDashboard() {
+  const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
   const [inventories, setInventories] = useState([]);
   const [products, setProducts] = useState([]);
+  const [waitingToCancelCount, setWaitingToCancelCount] = useState(0);
+  const [productionPlans, setProductionPlans] = useState([]);
+  const [pendingImportBatches, setPendingImportBatches] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,27 +37,32 @@ export default function ManagerDashboard() {
       fetchOrders().catch(() => []),
       getInventories().catch(() => []),
       getProducts().catch(() => []),
-    ]).then(([o, inv, p]) => {
+      getLogBatchesByStatus('WAITING_TO_CANCEL').catch(() => []),
+      getProductionPlans().catch(() => []),
+      getLogBatchesByStatus('WAITING_TO_CONFIRM').catch(() => []),
+    ]).then(([o, inv, p, expiring, plans, importBatches]) => {
       setOrders(Array.isArray(o) ? o : []);
       setInventories(Array.isArray(inv) ? inv : []);
       setProducts(Array.isArray(p) ? p : []);
+      setWaitingToCancelCount(Array.isArray(expiring) ? expiring.length : 0);
+      setProductionPlans(Array.isArray(plans) ? plans : []);
+      setPendingImportBatches(Array.isArray(importBatches) ? importBatches : []);
     }).finally(() => setLoading(false));
   };
 
-  const activePlans = 0;
+  const activePlans = productionPlans.filter(p =>
+    p.status === 'PROCESSING' || p.status === 'WAITING'
+  ).length;
   const pendingOrders = orders.filter((o) => o.status === 'WAITING').length;
   const lowStockItems = inventories.filter((i) => (i.quantity ?? 0) < 50);
   const expiredInventory = inventories.filter((i) => {
     const expiry = new Date(i.expiry_date || 0);
     return expiry < new Date() && (i.quantity ?? 0) > 0;
   });
-  // Note: pendingImportBatches cần API Production Batches từ backend
-  // Hiện tại để [], khi backend bổ sung API sẽ thay thế bằng dữ liệu thật
-  const pendingImportBatches = [];
   const finishedProducts = products.filter((p) => p.product_type !== 'RAW_MATERIAL');
 
   const handleImportBatch = () => {
-    toast.info('Chức năng nhập kho từ lô sản xuất cần API Production Batches.');
+    toast.info('Lô hàng WAITING_TO_CONFIRM - Thủ kho cần xác nhận nhập kho.');
   };
 
   const handleDisposeInventory = (inv) => {
@@ -74,11 +86,17 @@ export default function ManagerDashboard() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Tổng quan Quản lý</h1>
-        <p className="text-muted-foreground">
-          Theo dõi sản xuất, tồn kho và duyệt nhập kho (Flow 2 & 4)
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Tổng quan Quản lý</h1>
+          <p className="text-muted-foreground">
+            Theo dõi sản xuất, tồn kho và duyệt nhập kho (Flow 2 & 4)
+          </p>
+        </div>
+        <Button onClick={() => navigate('/manager/reports')} className="bg-indigo-600 hover:bg-indigo-700">
+          <BarChart3 className="h-4 w-4 mr-2" /> Xem Báo cáo chi tiết
+          <ArrowRight className="h-4 w-4 ml-2" />
+        </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -112,14 +130,14 @@ export default function ManagerDashboard() {
             <p className="text-xs text-muted-foreground">Lô hàng đã SX xong</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className={waitingToCancelCount > 0 ? 'border-orange-300 bg-orange-50' : ''}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Cảnh báo rủi ro</CardTitle>
-            <AlertTriangle className="h-4 w-4 text-red-600" />
+            <AlertTriangle className={`h-4 w-4 ${waitingToCancelCount > 0 ? 'text-orange-600' : 'text-red-600'}`} />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{expiredInventory.length + lowStockItems.length}</div>
-            <p className="text-xs text-muted-foreground">Hết hạn / Tồn thấp</p>
+            <div className="text-2xl font-bold">{expiredInventory.length + lowStockItems.length + waitingToCancelCount}</div>
+            <p className="text-xs text-muted-foreground">Hết hạn / Tồn thấp / Chờ hủy ({waitingToCancelCount} lô)</p>
           </CardContent>
         </Card>
       </div>
