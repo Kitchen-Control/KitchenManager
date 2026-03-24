@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from "react";
 import {
   getProductionPlans,
-  getProductionPlanDetails,
-  getRecipeDetailsByRecipeId,
-  getInventories,
-  createTransaction
+  getMaterialRequirements,
+  getRawMaterialInventories,
+  createTransaction,
 } from "../../data/api";
 
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -16,237 +15,202 @@ import { toast } from "sonner";
 export default function MaterialAllocationPage() {
   const [plans, setPlans] = useState([]);
   const [inventories, setInventories] = useState([]);
-  const [allocations, setAllocations] = useState({});
   
+  // SỬA: Dùng key phẳng "planId|productId|batchId" để tránh lỗi đè dữ liệu
+  const [allocations, setAllocations] = useState({});
+  const [editedMaterials, setEditedMaterials] = useState({});
+
   useEffect(() => {
     fetchData();
   }, []);
 
-  // ================= FETCH =================
   const fetchData = async () => {
     try {
-      // 1. lấy plan WAITING
       const planData = await getProductionPlans();
-      const waitingPlans = planData.filter(
-  p => p.status?.toUpperCase() === "WAITING"
-);
+      const waitingPlans = planData.filter(p => p.status?.toUpperCase() === "WAITING");
 
-      // 2. load material cho từng plan
       const plansWithReq = await Promise.all(
         waitingPlans.map(async (plan) => {
-          const details = await getProductionPlanDetails(plan.planId);
-
-          const recipePromises = details.map(d => {
-  const recipeId =
-    d.recipeId || d.recipe_id || d.recipe?.recipeId;
-
-  if (!recipeId) {
-    console.warn("Missing recipeId:", d);
-    return Promise.resolve([]);
-  }
-
-  return getRecipeDetailsByRecipeId(recipeId);
-});
-
-const recipeResults = await Promise.all(recipePromises);
-
-let reqMap = {};
-
-details.forEach((item, index) => {
-  const recipeDetails = recipeResults[index]?.data || recipeResults[index] || [];
-
-  recipeDetails.forEach(r => {
-    const productId = r.rawMaterialId;
-    console.log("RECIPE RESULTS:", recipeResults);
-const productName = r.rawMaterialName;
-const qty = r.quantity * item.quantity;
-
-if (!reqMap[productId]) {
-  reqMap[productId] = {
-    productId,
-    productName,
-    requiredQty: 0
-  };
-}
-
-reqMap[productId].requiredQty += qty;
-  });
-});
-
+          const materials = await getMaterialRequirements(plan.planId);
           return {
             ...plan,
-            materials: Object.values(reqMap)
+            materials: (materials || []).map(m => ({
+              productId: m.productId,
+              productName: m.productName,
+              requiredQty: m.totalRequiredQuantity,
+              unit: m.unit
+            }))
           };
         })
       );
-
       setPlans(plansWithReq);
 
-      // 3. inventories
-      const invData = await getInventories();
-      console.log("ALL PLANS:", planData);
+      const invData = await getRawMaterialInventories();
       const invMap = {};
-
       invData.forEach(inv => {
-        if (!invMap[inv.product_id]) {
-          invMap[inv.product_id] = {
-            productId: inv.product_id,
-            productName: inv.product_name,
-            batches: []
-          };
+        const pId = inv.product_id || inv.productId;
+        if (!pId) return;
+        if (!invMap[pId]) {
+          invMap[pId] = { productId: pId, productName: inv.product_name, batches: [] };
         }
-
-        invMap[inv.product_id].batches.push({
+        invMap[pId].batches.push({
           batchId: inv.batch_id,
           quantity: inv.quantity,
           expiryDate: inv.expiry_date
         });
       });
-
-      // FEFO
-      Object.values(invMap).forEach(i => {
-        i.batches.sort(
-          (a, b) => new Date(a.expiryDate) - new Date(b.expiryDate)
-        );
-      });
-
       setInventories(Object.values(invMap));
-
     } catch (err) {
       toast.error(err.message);
     }
   };
 
-  // ================= INPUT =================
-  const handleChange = (planId, productId, batchId, value, max) => {
-    let val = Number(value);
-    if (val > max) val = max;
-    if (val < 0) val = 0;
+  // Hàm tính tổng đơn giản và chính xác
+  const getAllocatedSum = (planId, productId) => {
+    let total = 0;
+    const targetPlanId = String(planId);
+    const targetProductId = String(productId);
 
-    setAllocations(prev => ({
-      ...prev,
-      [planId]: {
-        ...(prev[planId] || {}),
-        [productId]: {
-          ...((prev[planId] || {})[productId] || {}),
-          [batchId]: val
+    Object.keys(allocations).forEach(key => {
+      const parts = key.split('|');
+      // parts[0] là planId, parts[1] là productId
+      if (parts[0] === targetPlanId && parts[1] === targetProductId) {
+        const val = parseFloat(allocations[key]);
+        if (!isNaN(val)) {
+          total += val;
         }
       }
-    }));
+    });
+    return total;
   };
 
-  const getAllocated = (planId, productId) => {
-    const p = allocations[planId]?.[productId] || {};
-    return Object.values(p).reduce((s, v) => s + (v || 0), 0);
-  };
-
-  // ================= CONFIRM =================
   const handleConfirm = async (plan) => {
     try {
-      const planAlloc = allocations[plan.planId] || {};
+      const transactions = [];
 
-      // validate
       for (const m of plan.materials) {
-        const total = getAllocated(plan.planId, m.productId);
-        if (total !== m.requiredQty) {
-          toast.error(`${m.productName} chưa đủ`);
+        const editKey = `${plan.planId}|${m.productId}`;
+        const required = parseFloat(editedMaterials[editKey]) || m.requiredQty;
+        const total = getAllocatedSum(plan.planId, m.productId);
+
+        // Kiểm tra logic: Nếu tổng cấp phát < nhu cầu thì chặn lại
+        if (total < required) {
+          toast.error(`${m.productName} chưa đủ số lượng! (Cần: ${required}, Đã chọn: ${total})`);
           return;
         }
+
+        // Gom các lô hàng có số lượng > 0
+        const prefix = `${plan.planId}|${m.productId}|`;
+        Object.keys(allocations).forEach(key => {
+          if (key.startsWith(prefix)) {
+            const qty = parseFloat(allocations[key]);
+            if (qty > 0) {
+              const parts = key.split('|'); // [planId, productId, batchId]
+              transactions.push({
+                productId: Number(parts[1]), // Đảm bảo là Number
+                batchId: Number(parts[2]),   // Đảm bảo là Number
+                quantity: qty,               // Số thực (0.5)
+                type: "EXPORT",              // Nghiệp vụ xuất kho sản xuất
+                note: `Cấp phát cho Plan #${plan.planId}`
+              });
+            }
+          }
+        });
       }
 
-      const requests = [];
-
-      for (const productId in planAlloc) {
-        const batches = planAlloc[productId];
-
-        for (const batchId in batches) {
-          const qty = batches[batchId];
-          if (!qty || qty <= 0) continue;
-
-          requests.push(
-            createTransaction({
-              productId: Number(productId),
-              batchId: Number(batchId),
-              quantity: qty,
-              type: "EXPORT",
-              note: `Production Plan ${plan.planId}`
-            })
-          );
-        }
+      if (transactions.length === 0) {
+        return toast.error("Vui lòng nhập số lượng vào các ô lô hàng!");
       }
 
-      await Promise.all(requests);
-
-      toast.success(`Plan ${plan.planId} done`);
-
+      // Gọi API POST tuần tự
+      const toastId = toast.loading("Đang thực hiện giao dịch kho...");
+      for (const tx of transactions) {
+        await createTransaction(tx);
+      }
+      
+      toast.success(`Xác nhận thành công cho Plan #${plan.planId}`, { id: toastId });
+      
+      // Reset và load lại dữ liệu mới nhất
+      setAllocations({});
+      fetchData(); 
     } catch (err) {
-      toast.error(err.message);
+      toast.error("Lỗi khi nạp dữ liệu vào API: " + err.message);
     }
   };
 
-  // ================= UI =================
   return (
     <div className="p-6 space-y-6">
-
       {plans.map(plan => (
         <Card key={plan.planId}>
           <CardHeader>
             <CardTitle className="flex justify-between">
               <span>Plan #{plan.planId}</span>
-              <Badge>{plan.status}</Badge>
+              <Badge variant="outline">{plan.status}</Badge>
             </CardTitle>
           </CardHeader>
-
-          <CardContent className="space-y-4">
-
+          <CardContent className="space-y-6">
             {plan.materials.map(mat => {
-              const inventory = inventories.find(i => i.productId === mat.productId);
-              const allocated = getAllocated(plan.planId, mat.productId);
+              const inventory = inventories.find(i => String(i.productId) === String(mat.productId));
+              const currentTotal = getAllocatedSum(plan.planId, mat.productId);
+              const editKey = `${plan.planId}|${mat.productId}`;
 
               return (
-                <div key={mat.productId} className="border p-3 rounded-lg">
-                  <div className="flex justify-between mb-2">
-                    <span>{mat.productName}</span>
-                    <span>
-                      {allocated} / {mat.requiredQty}
-                    </span>
-                  </div>
-
-                  {inventory?.batches.map(batch => (
-                    <div key={batch.batchId} className="flex justify-between mb-2">
-                      <span>
-                        Batch {batch.batchId} (Tồn {batch.quantity})
-                      </span>
-
+                <div key={mat.productId} className="border p-4 rounded-xl bg-slate-50/50">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-lg text-slate-700">{mat.productName}</span>
+                    <div className="flex items-center gap-2">
                       <Input
                         type="number"
-                        className="w-24"
-                        onChange={(e) =>
-                          handleChange(
-                            plan.planId,
-                            mat.productId,
-                            batch.batchId,
-                            e.target.value,
-                            batch.quantity
-                          )
-                        }
+                        step="0.5"
+                        className="w-24 bg-white h-9"
+                        value={editedMaterials[editKey] ?? mat.requiredQty}
+                        onChange={(e) => {
+                          const val = e.target.value === "" ? "" : parseFloat(e.target.value);
+                          setEditedMaterials(prev => ({ ...prev, [editKey]: val }));
+                        }}
                       />
+                      <span className="text-sm font-medium">/ {mat.requiredQty} {mat.unit}</span>
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="space-y-2">
+                    {inventory?.batches.map(batch => {
+                      const batchKey = `${plan.planId}|${mat.productId}|${batch.batchId}`;
+                      return (
+                        <div key={batch.batchId} className="flex justify-between items-center bg-white p-2 rounded border shadow-sm text-sm">
+                          <span>Lô <b>{batch.batchId}</b> (Tồn: {batch.quantity})</span>
+                          <Input
+  type="number"
+  step="0.1"
+  className="w-32 h-8"
+  placeholder="0.0"
+  // Tạo key bằng cách ép kiểu String thủ công cho chắc chắn
+  value={allocations[`${String(plan.planId)}|${String(mat.productId)}|${String(batch.batchId)}`] ?? ""}
+  onChange={(e) => {
+    const val = e.target.value; 
+    const key = `${String(plan.planId)}|${String(mat.productId)}|${String(batch.batchId)}`;
+    
+    setAllocations(prev => ({
+      ...prev,
+      [key]: val 
+    }));
+  }}
+/>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  <div className={`mt-3 text-right font-bold ${currentTotal >= (editedMaterials[editKey] ?? mat.requiredQty) ? "text-green-600" : "text-red-500"}`}>
+                    Đã chọn: {currentTotal} {mat.unit}
+                  </div>
                 </div>
               );
             })}
-
-            <div className="flex justify-end">
-              <Button onClick={() => handleConfirm(plan)}>
-                Confirm Plan
-              </Button>
-            </div>
-
+            <Button className="w-full h-12 text-lg" onClick={() => handleConfirm(plan)}>Xác nhận Cấp phát</Button>
           </CardContent>
         </Card>
       ))}
-
     </div>
   );
 }
