@@ -48,7 +48,6 @@ const menuByRole = {
   1: [
     { title: 'Bảng điều khiển', url: '/admin', icon: LayoutDashboard },
     { title: 'Quản lý công thức', url: '/admin/recipes', icon: BookOpen },
-    { title: 'Kế hoạch sản xuất', url: '/admin/plans', icon: Calendar },
     { title: 'Quản lý sản phẩm', url: '/admin/products', icon: Package },
     { title: 'Quản lý người dùng', url: '/admin/users', icon: Users },
     { title: 'Báo cáo', url: '/admin/reports', icon: BarChart3 },

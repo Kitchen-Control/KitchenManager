@@ -114,7 +114,7 @@ export default function OrderHistory() {
     const newComment = currentComment ? `${currentComment} FINAL` : 'FINAL';
     
     // UI Hiding first (Optimistic)
-    setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, comment: newComment } : o));
+    setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, comment: newComment, status: 'DONE' } : o));
     
     // Hard persist in localStorage if server fails
     try {
@@ -125,7 +125,7 @@ export default function OrderHistory() {
     } catch (e) { console.warn('LocalStorage error:', e); }
 
     try {
-      await updateOrderStatus(order.order_id, order.status, newComment);
+      await updateOrderStatus(order.order_id, 'DONE', newComment);
       toast.success(`Đơn hàng #${order.order_id} đã được đối soát hoàn tất.`);
       reloadDashboard();
     } catch (e) {
@@ -321,11 +321,13 @@ export default function OrderHistory() {
             localFinalized = Array.isArray(finalizedList) && finalizedList.map(Number).includes(Number(order.order_id));
           } catch (e) {}
 
-          const isFinalized = (order.comment || '').toUpperCase().includes('FINAL') || localFinalized;
+          const isFinalized = (order.comment || '').toUpperCase().includes('FINAL') || localFinalized || order.status === 'DONE';
           
           const canCancel = order.status === 'WAITING';
-          const canReportIssue = ['DISPATCHED', 'DELIVERING', 'DONE'].includes(order.status) && !isFinalized;
-          const canFinalize = order.status === 'DONE' && !isFinalized;
+          const canReportIssue = ['DISPATCHED', 'DELIVERING'].includes(order.status) && !isFinalized;
+          const canFinalize = order.status === 'DELIVERING' && !isFinalized;
+
+          const totalPrice = order.totalAmount || order.total_amount || details.reduce((sum, d) => sum + (d.quantity * (d.unitPrice || d.price || d.unit_price || 0)), 0);
 
           return (
             <Card key={order.order_id} className="overflow-hidden">
@@ -351,6 +353,9 @@ export default function OrderHistory() {
                               {formatDate(order.order_date)}
                             </span>
                             <span>{details.length} sản phẩm</span>
+                            <span className="font-semibold text-slate-800 ml-2">
+                              Tổng: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
+                            </span>
                           </div>
                         </div>
                       </div>
