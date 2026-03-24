@@ -12,7 +12,7 @@ import { Loader2, ShoppingCart, CheckCircle2, Package, RefreshCw, AlertCircle, H
 import { toast } from 'sonner';
 
 export default function WarehouseProcurement() {
-  const [activeTab, setActiveTab] = useState('waiting');
+  const [activeTab, setActiveTab] = useState('purchase');
   const [materials, setMaterials] = useState([]);
   const [batches, setBatches] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,18 +46,8 @@ export default function WarehouseProcurement() {
     fetchData();
   }, []);
 
-  const waitingBatches = batches.filter(b => b.status === 'WAITING_TO_CONFIRM');
-  const confirmedBatches = batches.filter(b => b.status === 'DONE').sort((a,b) => b.batch_id - a.batch_id);
-
-  const handleConfirmBatch = async (batchId) => {
-    try {
-      await updateLogBatchStatus(batchId, 'DONE');
-      toast.success('Đã xác nhận nhập kho và cập nhật tồn kho!');
-      fetchData();
-    } catch (error) {
-      toast.error('Lỗi xác nhận: ' + error.message);
-    }
-  };
+  // API trả về mọi lô hàng, Warehouse Procurement chỉ xem lịch sử lô hàng mua ngoài do Flow quy định (chỉ cho warehouse xem PURCHASE)
+  const confirmedBatches = batches.filter(b => b.status === 'DONE' && b.type === 'PURCHASE').sort((a,b) => b.batch_id - a.batch_id);
 
   const handlePurchaseSubmit = async (e) => {
     e.preventDefault();
@@ -104,7 +94,7 @@ export default function WarehouseProcurement() {
         <Button variant="outline" onClick={fetchData}><RefreshCw className="h-4 w-4 mr-2" /> Làm mới</Button>
       </div>
 
-      <Tabs defaultValue="waiting" onValueChange={setActiveTab} className="space-y-4">
+      <Tabs defaultValue="purchase" onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
           <TabsTrigger value="purchase">Nhập mua ngoài</TabsTrigger>
           <TabsTrigger value="history">Lịch sử nhập</TabsTrigger>
