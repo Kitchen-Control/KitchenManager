@@ -331,7 +331,24 @@ export default function WarehouseOutbound() {
     const { order, manualAllocations } = allocationModal;
     const finalAllocations = [];
     
-    // Map manualAllocations to [{ orderDetailId, batchPicks: [{batchId, quantity}] }]
+    // 1. Validate that EVERY product is fully and exactly allocated
+    let validationError = null;
+    for (const detail of (order.order_details || [])) {
+      const allocatedBatches = manualAllocations[detail.order_detail_id] || {};
+      const totalAllocated = Object.values(allocatedBatches).reduce((sum, val) => sum + (parseInt(val) || 0), 0);
+      
+      if (totalAllocated !== detail.quantity) {
+        validationError = `Sản phẩm "${detail.product_name}" yêu cầu ${detail.quantity} nhưng đang phân bổ ${totalAllocated}. Vui lòng chia cho khớp số lượng!`;
+        break; // Stop at first error
+      }
+    }
+
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
+    // 2. Map manualAllocations to [{ orderDetailId, batchPicks: [{batchId, quantity}] }]
     Object.keys(manualAllocations).forEach(detailId => {
       const batchPicks = [];
       Object.keys(manualAllocations[detailId]).forEach(batchId => {

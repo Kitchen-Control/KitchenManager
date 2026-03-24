@@ -136,7 +136,7 @@ export default function MyTrips() {
 
       // CRITICAL: Ensure we have details for supplement creation
       initialOutcomes[order.order_id] = {
-        status: 'DONE',
+        status: 'NORMAL',
         details: finalDetails,
         receipts: exportReceipts,
         storeId: order.store?.storeId || order.store_id || order.sender_id
@@ -156,20 +156,23 @@ export default function MyTrips() {
       for (const orderId in orderOutcomes) {
         const outcome = orderOutcomes[orderId];
         const status = outcome.status;
-        const note = status === 'DONE' ? 'Giao thanh cong' : 
-                     status === 'DAMAGED' ? 'Hang hong' : 'Loi';
 
-        // Update Order Status first
-        try {
-          await updateOrderStatus(parseInt(orderId), status, note);
-        } catch (e) {
-          console.warn(`Order #${orderId} update failed:`, e);
+        // ONLY update Order Status if DAMAGED. If NORMAL, Store will mark it DONE later.
+        if (status === 'DAMAGED') {
+          try {
+            await updateOrderStatus(parseInt(orderId), 'DAMAGED', 'Shipper báo hỏng');
+          } catch (e) {
+            console.warn(`Order #${orderId} update failed:`, e);
+          }
         }
 
-        // Update all related EXPORT receipts to COMPLETED
+        // Update all related EXPORT receipts to COMPLETED (meaning Shipper finished moving them)
+        // Wait, if it's delivered normally, receipts should be DELIVERED. 
+        // Flow 1 Step 7: Shipper Hoàn thành chuyến -> receipt = DELIVERED.
+        const receiptFinalStatus = status === 'DAMAGED' ? 'COMPLETED' : 'DELIVERED';
         for (const r of (outcome.receipts || [])) {
           try {
-            await updateReceiptStatus(r.receipt_id, 'COMPLETED');
+            await updateReceiptStatus(r.receipt_id, receiptFinalStatus);
           } catch (e) {
             console.warn(`Receipt #${r.receipt_id} update failed:`, e);
           }
@@ -229,7 +232,7 @@ export default function MyTrips() {
       
       // Calculate trip status
       const allDamaged = Object.values(orderOutcomes).every(o => o.status === 'DAMAGED');
-      const tripStatus = allDamaged ? 'DAMAGED' : 'DONE'; 
+      const tripStatus = allDamaged && Object.values(orderOutcomes).length > 0 ? 'DAMAGED' : 'DONE'; 
 
       await updateDeliveryStatus(selectedDelivery.delivery_id, tripStatus).catch(err => {
         console.warn('Delivery status update failed, ignoring:', err);
@@ -379,76 +382,45 @@ export default function MyTrips() {
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Đối soát & Hoàn tất chuyến #{selectedDelivery?.delivery_id}</DialogTitle>
-            <DialogDescription>Xác nhận tình trạng thực tế của từng đơn hàng trước khi đóng chuyến.</DialogDescription>
-            <div className="flex gap-2 mt-4">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="flex-1 bg-green-50 text-green-700 border-green-200 hover:bg-green-100 font-bold"
-                onClick={() => {
-                  const bulk = {};
-                  selectedDelivery?.orders.forEach(o => {
-                    bulk[o.order_id] = { ...orderOutcomes[o.order_id], status: 'DONE' };
-                  });
-                  setOrderOutcomes(prev => ({ ...prev, ...bulk }));
-                }}
-              >
-                Hoàn thành tất cả
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="flex-1 bg-red-50 text-red-700 border-red-200 hover:bg-red-100 font-bold"
-                onClick={() => {
-                  const bulk = {};
-                  selectedDelivery?.orders.forEach(o => {
-                    bulk[o.order_id] = { ...orderOutcomes[o.order_id], status: 'DAMAGED' };
-                  });
-                  setOrderOutcomes(prev => ({ ...prev, ...bulk }));
-                }}
-              >
-                Hỏng tất cả
-              </Button>
-            </div>
+            <DialogDescription>
+              Đánh dấu nếu có đơn vị từ chối/hỏng. Các đơn hàng bình thường sẽ giữ trạng thái Đang Giao cho đến khi Cửa hàng xác nhận.
+            </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-6 py-4">
+          <div className="space-y-4 py-4">
             {selectedDelivery?.orders.map(order => {
-              const outcome = orderOutcomes[order.order_id] || { status: 'DONE' };
+              const outcome = orderOutcomes[order.order_id] || { status: 'NORMAL' };
               return (
-                <div key={order.order_id} className="p-4 rounded-xl border bg-slate-50/50 space-y-4">
-                  <div className="flex justify-between items-center">
+                <div key={order.order_id} className="p-4 rounded-xl border bg-slate-50/50 space-y-3">
+                  <div className="flex justify-between items-center pb-2 border-b">
                     <span className="font-bold text-indigo-900 underline underline-offset-4">Đơn hàng #{order.order_id}</span>
                     <Badge variant="outline" className="bg-white">{order.store_name}</Badge>
                   </div>
 
-                  <RadioGroup 
-                    value={outcome.status} 
-                    onValueChange={(val) => setOrderOutcomes(prev => ({
-                      ...prev,
-                      [order.order_id]: { ...prev[order.order_id], status: val }
-                    }))}
-                    className="grid grid-cols-1 gap-2"
-                  >
-                    <div className="flex items-center space-x-2 p-2 rounded-lg bg-white border cursor-pointer hover:bg-green-50/30">
-                      <RadioGroupItem value="DONE" id={`done-${order.order_id}`} />
-                      <Label htmlFor={`done-${order.order_id}`} className="flex-1 cursor-pointer flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 text-green-600" /> Giao thành công (DONE)
-                      </Label>
-                    </div>
-                    <div className="flex items-center space-x-2 p-2 rounded-lg bg-white border cursor-pointer hover:bg-red-50/30 text-red-600">
-                      <RadioGroupItem value="DAMAGED" id={`damaged-${order.order_id}`} />
-                      <Label htmlFor={`damaged-${order.order_id}`} className="flex-1 cursor-pointer flex items-center gap-2">
-                        <PackageX className="h-4 w-4 text-red-500" /> Hàng hỏng / Từ chối (DAMAGED)
-                      </Label>
-                    </div>
-                  </RadioGroup>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Báo cáo sự cố:</span>
+                    <Button 
+                      variant={outcome.status === 'DAMAGED' ? 'destructive' : 'outline'}
+                      size="sm"
+                      onClick={() => setOrderOutcomes(prev => ({
+                        ...prev,
+                        [order.order_id]: { ...prev[order.order_id], status: outcome.status === 'DAMAGED' ? 'NORMAL' : 'DAMAGED' }
+                      }))}
+                      className={outcome.status === 'DAMAGED' ? 'bg-red-600 hover:bg-red-700 font-bold shadow-md' : 'text-slate-600 border-slate-300'}
+                    >
+                      {outcome.status === 'DAMAGED' ? (
+                        <><PackageX className="h-4 w-4 mr-2" /> Đã báo hỏng</>
+                      ) : (
+                        <><PackageX className="h-4 w-4 mr-2 text-red-500" /> Báo hỏng đơn này</>
+                      )}
+                    </Button>
+                  </div>
 
                   {outcome.status === 'DAMAGED' && (
-                    <div className="p-3 bg-red-50 rounded-lg border border-red-100 flex gap-2">
+                    <div className="p-3 bg-red-50 rounded-lg border border-red-100 flex gap-2 animate-in fade-in zoom-in-95">
                       <AlertTriangle className="h-5 w-5 text-red-500 shrink-0" />
                       <p className="text-[11px] text-red-800">
-                        Hệ thống sẽ ghi nhận hàng hỏng vào Waste Log. Toàn bộ hàng sẽ bị hủy bỏ theo quy trình ATTP.
+                        Hệ thống sẽ ghi nhận hàng hỏng vào Waste Log và tự động tạo đơn bù SUPPLEMENT.
                       </p>
                     </div>
                   )}

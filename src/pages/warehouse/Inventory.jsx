@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { getInventories } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { Loader2, Package, AlertTriangle, RefreshCw, History } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
+import { Loader2, Package, AlertTriangle, RefreshCw, History, Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -10,7 +11,19 @@ import { toast } from 'sonner';
 export default function Inventory() {
   const navigate = useNavigate();
   const [inventories, setInventories] = useState([]);
+  const [filteredInventories, setFilteredInventories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [filterType, setFilterType] = useState('ALL');
+
+  const PRODUCT_TYPES = [
+    { value: 'ALL', label: 'Tất cả loại' },
+    { value: 'RAW_MATERIAL', label: 'Nguyên vật liệu' },
+    { value: 'MAIN', label: 'Món chính' },
+    { value: 'SIDE', label: 'Món ăn kèm' },
+    { value: 'BEVERAGE', label: 'Đồ uống' },
+    { value: 'DESSERT', label: 'Tráng miệng' },
+    { value: 'SAUCE', label: 'Nước sốt' },
+  ];
 
   const fetchInventory = async () => {
     setIsLoading(true);
@@ -18,6 +31,7 @@ export default function Inventory() {
       const data = await getInventories();
       const sorted = (data || []).sort((a, b) => b.inventory_id - a.inventory_id);
       setInventories(sorted);
+      setFilteredInventories(sorted);
     } catch (error) {
       toast.error('Không thể tải dữ liệu tồn kho: ' + error.message);
     } finally {
@@ -28,6 +42,14 @@ export default function Inventory() {
   useEffect(() => {
     fetchInventory();
   }, []);
+
+  useEffect(() => {
+    if (filterType === 'ALL') {
+      setFilteredInventories(inventories);
+    } else {
+      setFilteredInventories(inventories.filter(item => item.product?.productType === filterType || item.product_type === filterType));
+    }
+  }, [filterType, inventories]);
 
   const getExpiryStatus = (dateString) => {
     const expiry = new Date(dateString);
@@ -52,6 +74,21 @@ export default function Inventory() {
           <p className="text-muted-foreground">Theo dõi số lượng và hạn sử dụng nguyên vật liệu.</p>
         </div>
         <div className="flex gap-2">
+          <Select value={filterType} onValueChange={setFilterType}>
+            <SelectTrigger className="w-[180px]">
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4" />
+                <SelectValue placeholder="Lọc theo loại" />
+              </div>
+            </SelectTrigger>
+            <SelectContent>
+              {PRODUCT_TYPES.map(type => (
+                <SelectItem key={type.value} value={type.value}>
+                  {type.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button onClick={() => navigate('/warehouse/inventory-history')} variant="outline" className="border-blue-200 text-blue-700 hover:bg-blue-50">
             <History className="mr-2 h-4 w-4" /> Lịch sử Nhập/Xuất
           </Button>
@@ -62,7 +99,7 @@ export default function Inventory() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {inventories.map((item) => {
+        {filteredInventories.map((item) => {
           const status = getExpiryStatus(item.expiry_date);
           return (
             <Card key={item.inventory_id} className="shadow-sm hover:shadow-md transition-shadow">
@@ -94,9 +131,9 @@ export default function Inventory() {
           );
         })}
         
-        {inventories.length === 0 && (
+        {filteredInventories.length === 0 && (
           <div className="col-span-full text-center py-12 text-muted-foreground">
-            Kho đang trống.
+            Không tìm thấy sản phẩm nào trong kho với điều kiện lọc này.
           </div>
         )}
       </div>
