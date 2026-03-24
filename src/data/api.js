@@ -80,6 +80,7 @@ function mapOrder(o) {
     status: o.status,
     img: o.img,
     comment: o.comment,
+    total_price: o.totalPrice,
     order_details: Array.isArray(o.orderDetails) ? o.orderDetails.map(mapOrderDetail) : [],
     feedback_id: o.feedbackId,
     feedback_rating: o.feedbackRating,
