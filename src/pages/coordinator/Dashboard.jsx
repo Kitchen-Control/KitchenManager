@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { fetchOrders, getDeliveries, getAllStores } from '../../data/api';
+import { fetchOrders, getDeliveries, getAllStores, getReceiptsByStatus } from '../../data/api';
 import { StatsCard } from '../../components/common/StatsCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
@@ -17,19 +17,29 @@ import {
 export default function CoordinatorDashboard() {
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
+  const [waitingCount, setWaitingCount] = useState(0);
   const [deliveries, setDeliveries] = useState([]);
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const reloadDashboard = () => {
-    setLoading(true);
     Promise.all([
       fetchOrders().catch(() => []),
+      getReceiptsByStatus('READY').catch(() => []),
       getDeliveries().catch(() => []),
       getAllStores().catch(() => []),
     ])
-      .then(([ordersRes, deliveriesRes, storesRes]) => {
-        setOrders(Array.isArray(ordersRes) ? ordersRes : []);
+      .then(([ordersRes, receiptsRes, deliveriesRes, storesRes]) => {
+        const allOrders = Array.isArray(ordersRes) ? ordersRes : [];
+        setOrders(allOrders);
+        // Count READY receipts for DISPATCHED or PARTIAL_DELIVERED orders
+        const allReceipts = Array.isArray(receiptsRes) ? receiptsRes : [];
+        const groupableOrders = allOrders.filter(o => 
+          o.status === 'DISPATCHED' || o.status === 'PARTIAL_DELIVERED'
+        );
+        const groupableIds = new Set(groupableOrders.map(o => o.order_id));
+        const readyReceipts = allReceipts.filter(r => groupableIds.has(r.order_id));
+        setWaitingCount(readyReceipts.length);
         setDeliveries(Array.isArray(deliveriesRes) ? deliveriesRes : []);
         setStores(Array.isArray(storesRes) ? storesRes : []);
       })
@@ -41,16 +51,24 @@ export default function CoordinatorDashboard() {
   }, []);
 
   const calculateDeliveryStatus = (delivery) => {
-    if (!delivery.orders || delivery.orders.length === 0) return 'WAITTING';
-    const hasWaiting = delivery.orders.some(o => o.status === 'WAITTING');
-    const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING');
-    const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING');
-    const allDone = delivery.orders.every(o => o.status === 'DONE');
+    // 1. If backend has assigned a terminal or active status, use it
+    if (['DELIVERING', 'DONE', 'DAMAGED', 'CANCEL'].includes(delivery.status)) {
+      return delivery.status;
+    }
+
+    if (!delivery.orders || delivery.orders.length === 0) return 'WAITING';
+
+    // 2. Otherwise calculate based on order statuses
+    const hasDelivering = delivery.orders.some(o => o.status === 'DELIVERING' || o.status === 'PARTIAL_DELIVERED');
+    const allDone = delivery.orders.every(o => ['DONE', 'DAMAGED', 'CANCELED'].includes(o.status));
     
     if (allDone) return 'DONE';
     if (hasDelivering) return 'DELIVERING';
+    
+    const hasProcessing = delivery.orders.some(o => o.status === 'PROCESSING' || o.status === 'DISPATCHED' || o.status === 'READY');
     if (hasProcessing) return 'PROCESSING';
-    return 'WAITTING';
+    
+    return 'WAITING';
   };
 
   const enrichedDeliveries = deliveries.map(d => ({
@@ -59,12 +77,16 @@ export default function CoordinatorDashboard() {
   }));
 
   const sortedOrders = [...orders].sort((a, b) => b.order_id - a.order_id);
-  const waitingOrders = sortedOrders.filter((o) => o.status === 'WAITTING' && !o.delivery_id);
+  // Orders that are DISPATCHED (receipt COMPLETED) and not yet in a delivery
+  const waitingOrders = sortedOrders.filter(
+    (o) => o.status === 'DISPATCHED' && !o.delivery_id
+  );
   const processingDeliveries = enrichedDeliveries.filter((d) => d.status === 'DELIVERING');
+  const finalizedDeliveries = enrichedDeliveries.filter((d) => d.status === 'DONE' || d.status === 'DAMAGED');
   const today = new Date().toISOString().split('T')[0];
   const todayDeliveries = enrichedDeliveries.filter((d) => (d.delivery_date || d.createdAt || '').startsWith(today));
   const completedToday = orders.filter(
-    (o) => o.status === 'DONE' && (o.order_date || '').startsWith(today)
+    (o) => ['DONE', 'DAMAGED', 'PARTIAL_DELIVERED'].includes(o.status) && (o.order_date || '').startsWith(today)
   );
 
   const recentOrders = waitingOrders.slice(0, 5).map((o) => ({
@@ -89,10 +111,10 @@ export default function CoordinatorDashboard() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
-          title="Đơn chờ xử lý"
-          value={waitingOrders.length}
+          title="Phiếu chờ gom"
+          value={waitingCount}
           icon={ClipboardList}
-          description="Cần gom đơn"
+          description="Phiếu READY sẵn sàng"
         />
         <StatsCard
           title="Đang giao hàng"

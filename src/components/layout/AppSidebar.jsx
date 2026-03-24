@@ -80,6 +80,7 @@ const menuByRole = {
   6: [
     { title: 'Chuyến hàng của tôi', url: '/shipper', icon: Truck },
     { title: 'Bản đồ giao hàng', url: '/shipper/map', icon: MapPin },
+    { title: 'Lịch sử giao hàng', url: '/shipper/history', icon: History },
   ],
   // Warehouse (Role 7)
   7: [
@@ -96,7 +97,7 @@ const kitchenExecutionMenu = [
   { title: 'Thực thi Sản xuất', url: '/kitchen/production', icon: ChefHat },
   { title: 'Chờ xác nhận', url: '/kitchen/batches/WAITING_TO_CONFIRM', icon: AlertTriangle },
   { title: 'Đang sản xuất', url: '/kitchen/batches/PROCESSING', icon: Timer },
-  { title: 'Chờ huỷ hàng', url: '/kitchen/batches/WAITING_TO_CANCLE', icon: FileWarning },
+  { title: 'Chờ huỷ hàng', url: '/kitchen/batches/WAITING_TO_CANCEL', icon: FileWarning },
 ];
 
 const kitchenBatchManagementMenu = [

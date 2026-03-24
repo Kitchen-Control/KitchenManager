@@ -97,59 +97,20 @@ export default function WarehouseProcurement() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Warehouse className="h-8 w-8 text-green-600" /> Quản lý Nhập kho
+            <Warehouse className="h-8 w-8 text-green-600" /> Quản lý Nhập Mua Nguyên Liệu
           </h1>
-          <p className="text-muted-foreground">Xác nhận lô sản xuất và nhập mua nguyên liệu</p>
+          <p className="text-muted-foreground">Nhập mua nguyên liệu và lịch sử nhập mua</p>
         </div>
         <Button variant="outline" onClick={fetchData}><RefreshCw className="h-4 w-4 mr-2" /> Làm mới</Button>
       </div>
 
       <Tabs defaultValue="waiting" onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
-          <TabsTrigger value="waiting" className="relative">
-            Lô chờ xác nhận
-            {waitingBatches.length > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] text-white">
-                {waitingBatches.length}
-              </span>
-            )}
-          </TabsTrigger>
+        <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
           <TabsTrigger value="purchase">Nhập mua ngoài</TabsTrigger>
           <TabsTrigger value="history">Lịch sử nhập</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="waiting" className="space-y-4">
-          {waitingBatches.length === 0 ? (
-            <div className="text-center py-12 border border-dashed rounded-lg bg-muted/20">
-              <Package className="h-10 w-10 mx-auto mb-2 opacity-20" />
-              <p className="text-muted-foreground">Không có lô hàng nào cần xác nhận</p>
-            </div>
-          ) : (
-            <div className="grid gap-4">
-              {waitingBatches.map(batch => (
-                <Card key={batch.batch_id}>
-                  <CardContent className="p-4 flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-lg">Lô #{batch.batch_id}</span>
-                        <Badge variant="outline">{batch.product_name}</Badge>
-                        <Badge className="bg-orange-100 text-orange-800">SẢN XUẤT</Badge>
-                      </div>
-                      <p className="text-sm mt-1">
-                        Số lượng: <strong>{batch.quantity}</strong> | 
-                        HSD: {batch.expiry_date ? new Date(batch.expiry_date).toLocaleDateString('vi-VN') : 'N/A'}
-                      </p>
-                      <p className="text-xs text-muted-foreground italic">Từ Bếp Trung Tâm</p>
-                    </div>
-                    <Button onClick={() => handleConfirmBatch(batch.batch_id)} className="bg-green-600 hover:bg-green-700">
-                      <CheckCircle2 className="h-4 w-4 mr-2" /> Xác nhận nhập kho
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
+
 
         <TabsContent value="purchase">
           <Card className="max-w-xl mx-auto">

@@ -61,8 +61,7 @@ export function MainLayout() {
   const [showNotifications, setShowNotifications] = React.useState(false);
 
   React.useEffect(() => {
-    // Sync orders from backend when layout mounts
-    fetchOrders();
+    // Sync logic removed as it was redundant and causing 500 errors
   }, []);
 
   if (isLoading) {
