@@ -181,7 +181,7 @@ export default function MaterialAllocationPage() {
                           <span>Lô <b>{batch.batchId}</b> (Tồn: {batch.quantity})</span>
                           <Input
   type="number"
-  step="0.1"
+  step="0.5"
   className="w-32 h-8"
   placeholder="0.0"
   // Tạo key bằng cách ép kiểu String thủ công cho chắc chắn
