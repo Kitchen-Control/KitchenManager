@@ -5,6 +5,8 @@ Table roles {
 }
 
 
+
+
 Table users {
   user_id int [pk, increment]
   username varchar
@@ -15,12 +17,16 @@ Table users {
 }
 
 
+
+
 Table stores {
   store_id int [pk, increment]
   store_name varchar
   address varchar
   phone varchar
 }
+
+
 
 
 // --- 2. PRODUCTS & RECIPES ---
@@ -34,6 +40,8 @@ Enum product_type_enum {
 }
 
 
+
+
 Table products {
   product_id int [pk, increment]
   product_name varchar
@@ -42,6 +50,8 @@ Table products {
   price float
   shelf_life_days int [note: "sản phẩm có thời gian sủ dụng bao ngày (ex: 30 days)"]
 }
+
+
 
 
 Table recipes {
@@ -53,12 +63,16 @@ Table recipes {
 }
 
 
+
+
 Table recipe_details {
   recipe_detail_id int [pk, increment]
   recipe_id int
   raw_material_id int
   quantity float
 }
+
+
 
 
 Enum production_plan_status {
@@ -69,6 +83,8 @@ Enum production_plan_status {
   DONE
   CANCEL
 }
+
+
 
 
 // --- 3. ORDERS & PRODUCTION FLOW ---
@@ -82,6 +98,8 @@ Table production_plans {
 }
 
 
+
+
 Table production_plan_details {
   plan_detail_id int [pk, increment]
   plan_id int [not null]            
@@ -89,6 +107,8 @@ Table production_plan_details {
   quantity float [not null]  
   note text
 }
+
+
 
 
 Enum orders_status {
@@ -101,6 +121,8 @@ Enum orders_status {
   DAMAGED
   CANCELED
 }
+
+
 
 
 Table orders {
@@ -116,12 +138,16 @@ Table orders {
 }
 
 
+
+
 Table order_details {
   order_detail_id int [pk, increment]
   order_id int
   product_id int
   quantity float
 }
+
+
 
 
 Enum log_batches_enum {
@@ -133,10 +159,14 @@ Enum log_batches_enum {
 }
 
 
+
+
 Enum log_batches_type {
   PRODUCTION
   PURCHASE
 }
+
+
 
 
 Table log_batches {
@@ -152,6 +182,8 @@ Table log_batches {
 }
 
 
+
+
 // --- 4. CENTRAL WAREHOUSE ---
 Table inventories {
   inventory_id int [pk, increment]
@@ -162,10 +194,14 @@ Table inventories {
 }
 
 
+
+
 Enum inventories_type {
   IMPORT
   EXPORT
 }
+
+
 
 
 Table inventory_transactions {
@@ -181,12 +217,16 @@ Table inventory_transactions {
 }
 
 
+
+
 Enum deliveries_status {
   WAITING
   DELIVERING
   DONE
   CANCELED
 }
+
+
 
 
 Table deliveries {
@@ -198,6 +238,8 @@ Table deliveries {
 }
 
 
+
+
 Table quality_feedbacks {
   feedback_id int [pk, increment]
   order_id int
@@ -207,12 +249,20 @@ Table quality_feedbacks {
 }
 
 
-Table reports {
-  report_id int [pk, increment]
-  report_type varchar
-  user_id int
-  created_date datetime
+
+
+Table waste_logs {
+  waste_id int [pk, increment]
+  product_id int
+  batch_id int
+  quantity float
+  waste_type varchar [note: "EXPIRED, DAMAGED_SHIPPING"]
+  order_id int
+  note varchar
+  created_at datetime
 }
+
+
 
 
 /*=====================================================================================*/
@@ -222,13 +272,16 @@ Table reports {
 /*=====================================================================================*/
 
 
+
+
 // --- 5. WAREHOUSE DOCUMENTS (PHIẾU XUẤT/NHẬP) ---
 // Bảng này bạn gọi là Receipt (tương đương Phiếu Xuất/Delivery Note)
 Enum receipt_status {
-  DRAFT
+  READY
   COMPLETED
-  CANCELED
 }
+
+
 
 
 Table receipts {
@@ -241,12 +294,16 @@ Table receipts {
 }
 
 
+
+
 // --- RELATIONSHIPS ---
 // 1. Order đẻ ra Receipt (Phiếu xuất)
 Ref: receipts.order_id - orders.order_id
 // 2. Receipt (Phiếu xuất) chứa nhiều Transaction (Dòng biến động kho)
 Ref: inventory_transactions.receipt_id > receipts.receipt_id
 // 3. User (Thủ kho) tạo phiếu
+
+
 
 
 //TABLE Order detail fill
@@ -257,6 +314,8 @@ Table order_detail_fill {
   quantity float [not null]      // Số lượng lấy từ lô này
   created_at datetime
 }
+
+
 
 
 Ref: order_detail_fill.order_detail_id > order_details.order_detail_id
@@ -288,7 +347,8 @@ Ref: inventory_transactions.product_id > products.product_id
 Ref: inventory_transactions.batch_id > log_batches.batch_id
 Ref: deliveries.delivery_id < orders.delivery_id
 Ref: quality_feedbacks.order_id - orders.order_id
-Ref: reports.user_id > users.user_id
+
+
 
 
 Ref: users.user_id < deliveries.shipper_id
@@ -298,20 +358,9 @@ Ref: production_plans.plan_id < production_plan_details.plan_id
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+Ref: waste_logs.product_id > products.product_id
+Ref: waste_logs.batch_id > log_batches.batch_id
+Ref: waste_logs.order_id - orders.order_id
 
 
 
