@@ -1,93 +1,193 @@
-FLOW 1: QUY TRÌNH ĐẶT HÀNG & XUẤT KHO (MAIN FLOW)
+FLOW 1 (FINAL): QUY TRÌNH ĐẶT HÀNG & XUẤT KHO
 Bước 1: Cửa hàng đặt hàng (Ordering)
-Actor: Store User (Role: STORE).
+Actor: Store User (Role: STORE)
 Hành động:
-User đăng nhập App, xem danh sách FINISHED_PRODUCT.
+User đăng nhập App, xem danh sách sản phẩm có thể đặt.
 Hệ thống tính Tồn kho khả dụng (Available Stock) theo công thức:
-Available = Tổng Inventory (Thực tế) - Tổng (order_details của các đơn WAITING/PROCESSING/LOADED).
+Available = SUM(inventories.quantity WHERE product_id = X) - SUM(order_details.quantity WHERE product_id = X AND orders.status IN (WAITING, PROCESSING))
 Store chọn số lượng → Nhấn "Đặt hàng".
 DB Update:
-Tạo bản ghi bảng orders (Status: WAITING).
+Tạo bản ghi bảng orders (Status: WAITING). 
 Tạo bản ghi bảng order_details.
-Bước 2: Điều phối & Gom đơn (Coordination)
-Actor: Supply Coordinator (Role: SUPPLY_COORDINATOR).
-Hành động:
-Xem danh sách các đơn hàng đang WAITING.
-Chọn nhiều đơn hàng cùng tuyến đường để gom lại.
-Tạo chuyến xe (deliveries) và gán Shipper (shipper_id).
-DB Update:
-Tạo bản ghi bảng deliveries với trạng thái là WAITING.
-Update orders.delivery_id và chuyển orders.status sang PROCESSING.
-Bước 3: Phân bổ hàng & Tạo Phiếu Xuất (Warehousing - CORE STEP)
-Actor: Warehouse Keeper.
-Giai đoạn 3.1: Phân bổ tự động (Allocation - Logic FEFO)
-Khi đơn hàng chuyển sang PROCESSING, hệ thống tự động chạy thuật toán FEFO:
-Logic: Quét bảng inventories, tìm các batch_id có hạn sử dụng gần nhất (chưa hết hạn) và còn quantity > 0.
-DB Update: Ghi vào bảng order_detail_fill.
-Ví dụ: Khách đặt 10 cái. Hệ thống tự điền: Lấy 3 cái Batch A + 7 cái Batch B.
-Lưu ý: Lúc này Kho thực tế (inventories) CHƯA BỊ TRỪ, mới chỉ là "giữ chỗ" trên giấy tờ.
-Giai đoạn 3.2: Tạo Phiếu Xuất (Receipt Creation)
-Thủ kho mở App lên, xem danh sách đơn hàng đang PROCESSING. Lúc này, giao diện (FE) sẽ gọi API để hiển thị chi tiết. API sẽ query JOIN các bảng orders → order_details → order_detail_fill → log_batches để show ra một danh sách hướng dẫn gắp hàng cực kỳ trực quan.
-Đầu tiên thủ kho tạo receipt với trạng thái DRAFT, lúc này hệ thống chỉ ghi nhận phiếu xuất kho dự kiến và chưa thực hiện trừ kho.
-Sau đó hệ thống sẽ phân bổ hàng cần xuất theo từng batch (dựa trên FEFO hoặc FIFO) và hiển thị trên app để thủ kho biết cần lấy bao nhiêu sản phẩm từ mỗi lô 
-Nhấn nút "Tạo Phiếu Xuất Kho".
-Lúc này phải hiển thị tổng ở trên màn hình cho dễ lấy hàng ( hiển thị trong những order hồi nãy được xác nhất tạo phiếu xuất bản nháp).
-DB Update:
-Tạo bản ghi bảng receipts (Status: DRAFT).
-Link receipts.order_id với đơn hàng tương ứng.
-Giai đoạn 3.3: Xác nhận Xuất kho (Dispatched)
-Thủ kho đi nhặt hàng theo đúng Batch đã phân bổ, mang ra khu vực giao hàng.
-Sau khi kiểm tra xong và bấm xác nhận xuất kho, hệ thống sẽ chuyển receipt sang trạng thái COMPLETED. Lúc này hệ thống mới tạo các dòng inventory_transactions tương ứng với từng batch và cập nhật lại số lượng tồn kho trong bảng inventories.
-Nhấn nút "Hoàn tất Xuất kho" (Confirm).
-Một khi xác nhận đã xuất kho, order status cũng chuyển thành DISPATCHED
-DB Update:
-Update receipts.status → COMPLETED.
-Hệ thống tự động (Trigger/Service): Dựa vào order_detail_fill, tạo các dòng inventory_transactions (Type: EXPORT) và gán receipt_id.
-Trừ số lượng trong bảng inventories.
-order.status tự động cập nhật thành DISPATCHED
-Bước 4: Giao hàng (Shipping)
-Actor: Shipper.
-Hành động:
-Shipper nhận "Phiếu Xuất Kho" (receipts bản cứng hoặc trên App) và hàng hóa.
-Ban đầu Del
-Shipper nhận hàng vật lý, mở App và bấm "Nhận và giao".
-Lưu ý: đơn phải ở trạng thái Dispatched thì mới cho shipper nhấn nút
-App chuyển trạng thái orders.status → DELIVERING.
-Shipper đi giao theo địa chỉ Store.
-	DB Update:
-Tự động chuyển các đơn thuộc chuyến đó orders.status → DELIVERING
-Bước 5: Nhận hàng & Đánh giá (Completion)
-Actor: Store User & Shipper.
-Hành động:
-Store kiểm hàng.
-Shipper xác nhận giao thành công trên App → orders.status = DONE.
-Store vào đánh giá đơn hàng → Tạo bản ghi quality_feedbacks.
-(Trường hợp Rủi ro): Nếu hàng hỏng/từ chối nhận → orders.status = DAMAGED. Áp dụng Rule An toàn thực phẩm: Hàng hóa bị từ chối sẽ được mang đi tiêu hủy, TUYỆT ĐỐI KHÔNG hoàn lại vào kho (Không cộng lại số lượng vào bảng inventories). Hệ thống ghi nhận đây là Hao phí (Waste).
+Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/createOrder
+🚫 Huỷ đơn (Sub-flow)
+Actor: Store User
+Hành động: Store bấm nút "Huỷ Đơn".
+Lưu ý: Chỉ huỷ được khi orders.status = WAITING. Khi Warehouse đã xác nhận (PROCESSING trở đi), không được phép huỷ.
+DB Update: Update orders.status → CANCELED. (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/updateOrderStatus)
 
+Bước 2: Warehouse duyệt đơn (Order Confirmation)
+Actor: Warehouse Keeper (Role: WAREHOUSE_KEEPER)
+Hành động:
+Mở App, vào tab "Đơn hàng chờ duyệt" (hiển thị danh sách orders đang WAITING).
+Xem chi tiết từng đơn: Danh sách sản phẩm (order_details JOIN products) .
+Warehouse Keeper kiểm tra thực tế kho và đưa ra quyết định:
+Trường hợp A - Duyệt đơn: Nhấn duyệt.
+Trường hợp B - Từ chối đơn: Nhấn "Từ chối đơn" và nhập lý do (optional).
+DB Update (Trường hợp A - Duyệt đơn):
+Update orders.status: WAITING → PROCESSING.
+Trigger thuật toán FEFO: Quét inventories JOIN log_batches (tìm batch_id có expiry_date gần nhất, log_batches.status = DONE và inventories.quantity > 0).
+Sau khi chạy FEFO xong, sẽ đề xuất ra cho warehouse thấy cái đề xuất sắp xếp log_batches (FEFO sẽ tự lấy các sản phẩm trong log_batches mà có ngày hết hạn gần nhất để đề xuất) đó có hợp lí hay ko (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/getFefoSuggestion). Nếu hợp lí, warehouse chỉ việc confirm và hệ thống sẽ tự tạo lô tự động
+Nếu đề xuất ko hợp lí thì warehouse sẽ xem các log_batches thuộc sản phẩm mà store đặt đó rồi sẽ tự sắp xếp bằng tay -> hệ thống sẽ tự kiểm tra xem warehouse có sắp xếp đủ hàng cho order đó ko. Nếu ko đủ sẽ ném ra 1 exception kèm thông báo, nếu đủ thì hệ thống sẽ tự tạo 1 order_detail_fill dựa vào ý sắp xếp của warehouse (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/confirmAllocation).
+Lưu ý 1: inventories.quantity CHƯA BỊ TRỪ và order_detail_fill cũng chưa đc lưu vào DB.
+DB Update (Trường hợp B - Từ chối đơn):
+Update orders.status: WAITING → CANCELED. (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/updateOrderStatus)
+Update lý do vào orders.comment.
+Push notification báo cho Store User.
+
+Bước 3: Warehouse soạn hàng & Tạo Phiếu Xuất (Warehousing)
+Actor: Warehouse Keeper (Role: WAREHOUSE_KEEPER)
+Giai đoạn 3.1: Tạo Phiếu Xuất Kho (Receipt Creation)
+Hành động:
+Mở App, vào tab "Đơn hàng cần soạn" (hiển thị orders đang PROCESSING).
+Xem danh sách hướng dẫn gắp hàng (JOIN orders → order_details → order_detail_fill → log_batches → products).
+Nhấn nút "Tạo Phiếu Xuất Kho".
+DB Update:
+Tạo bản ghi bảng receipts (receipt_code, order_id, export_date, Status: DRAFT). (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Receipts%20API/createReceipt)
+Link receipts.order_id với orders.order_id.
+Giữ nguyên orders.status là PROCESSING.
+🚫 Huỷ phiếu xuất (Sub-flow)
+Actor: Warehouse Keeper
+Hành động: Bấm nút "Huỷ phiếu" (chỉ áp dụng khi receipts.status = DRAFT).
+DB Update: Update receipts.status → CANCELED. (Swagger sử dụng http://localhost:8080/swagger-ui/index.html#/Receipts%20API/updateReceiptStatus)(orders.status vẫn giữ PROCESSING để có thể tạo lại phiếu mới).
+Giai đoạn 3.2: Xác nhận Xuất kho — Soạn hàng hoàn tất (Dispatched)
+Hành động:
+Nhặt hàng theo đúng batch đã phân bổ.
+Nhấn nút "Hoàn tất Xuất kho" sau khi kiểm tra xong.
+DB Update (Nằm trong 1 Database Transaction):
+Update receipts.status → COMPLETED. (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Receipts%20API/updateReceiptStatus)
+Tạo bản ghi inventory_transactions (Type: EXPORT, kèm receipt_id, product_id, batch_id, quantity từ order_detail_fill).
+Trừ số lượng thực tế: Update inventories.quantity theo từng batch_id.
+Update orders.status: PROCESSING → DISPATCHED.
+
+Bước 4: Điều phối & Gom đơn — Gán Shipper (Coordination)
+Actor: Supply Coordinator (Role: SUPPLY_COORDINATOR)
+Hành động:
+Xem danh sách đơn đang DISPATCHED.
+Chọn các đơn cùng tuyến để gom chuyến.
+Gán Shipper (shipper_id) và nhấn "Tạo chuyến & Gán Shipper".
+DB Update:
+Tạo bản ghi bảng deliveries (Status: WAITING, kèm shipper_id).(Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Deliveries%20API/createDelivery)
+Update orders.delivery_id = delivery_id vừa tạo cho các đơn được chọn.
+🚫 Huỷ chuyến (Sub-flow)
+Actor: Supply Coordinator
+Hành động: Bấm nút "Huỷ chuyến" (chỉ áp dụng khi deliveries.status = WAITING).
+DB Update:
+Update deliveries.status → CANCELED. (Swagger sử dụng:http://localhost:8080/swagger-ui/index.html#/Deliveries%20API/updateDeliveryStatus)
+Update deliveries.shipper_id = NULL.
+Update orders.delivery_id = NULL (Các đơn hàng giữ nguyên DISPATCHED để gom chuyến khác).
+
+Bước 5: Giao hàng (Shipping)
+Actor: Shipper (Role: SHIPPER)
+Hành động:
+Shipper nhận thông báo, xem chuyến hàng.
+Nhận hàng vật lý tại kho và bấm "Nhận hàng & Bắt đầu giao".
+Lưu ý: Mọi đơn trong chuyến phải là DISPATCHED mới thao tác được.
+DB Update:
+Update deliveries.status: WAITING → DELIVERING. (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Deliveries%20API/updateDeliveryStatus)
+Update orders.status của toàn bộ đơn trong chuyến: DISPATCHED → DELIVERING.
+
+Bước 6: Nhận hàng & Đánh giá (Completion)
+Actor: Store, Shipper
+Hành động:
+Store kiểm hàng vật lý.
+Shipper xác nhận giao thành công trên App.
+Store đánh giá chất lượng đơn hàng.
+DB Update:
+Update orders.status: DELIVERING → DONE. (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Orders%20API/updateOrderStatus)
+Tạo bản ghi quality_feedbacks (order_id, rating, comment, created_at). (Swagger sử dụng: http://localhost:8080/swagger-ui/index.html#/Quality%20Feedback%20API/createFeedback)
+
+Bước 7: Hoàn thành chuyến (Trip Completion)
+Actor: Shipper
+Hành động: Chỉ cần các order về trạng thái DONE, DAMAGED, PARTIAL_DELIVERED thì delivery tự động cập nhật về DONE.
+
+DB Update:
+Update các order.status về DONE, một khi tất cả các ORDER mà về DONE hết thì deliveries.status sẽ tự động từ DELIVERING -> DONE (Swagger sử dụng:http://localhost:8080/swagger-ui/index.html#/Orders%20API/updateOrderStatus)
+Update deliveries.status: DELIVERING → DONE.
+
+⚠️ CÁC TRƯỜNG HỢP RỦI RO (RISK SUB-FLOWS)
+Rủi ro 1: Giao thiếu hàng
+Hành động: Store báo cáo trên App các sản phẩm bị thiếu (chi tiết theo order_details).
+DB Update:
+Update orders.status → PARTIAL_DELIVERED.
+Tạo bản ghi orders mới (Type: SUPPLEMENT) để bù hàng.
+Rủi ro 2: Hàng hỏng / Từ chối nhận đột xuất
+Hành động: Store từ chối nhận hàng do hỏng hóc. Áp dụng Rule An toàn thực phẩm: Hàng đi 1 chiều, mang đi tiêu hủy, KHÔNG hoàn kho.
+DB Update:
+Update orders.status → DAMAGED.
+Lưu ý: KHÔNG cộng lại inventories.quantity. Hệ thống ghi nhận hao phí (Waste). (Lí do: An toàn thực phẩm, một khi hàng ra khỏi kho thì ko cho quay vào lại).
 
 FLOW 2: QUY TRÌNH SẢN XUẤT (INTERNAL PRODUCTION)
-Bước 1: Lập Kế hoạch (Planning)
-Actor: Manager.
-Hành động: Tạo production_plans và production_plan_details (dựa trên công thức recipes để tính toán nguyên liệu cần thiết). production_plans trạng thái mặc định PROCESSING
-Bước 2: Thực hiện Sản xuất (Production)
-Actor: Central Kitchen.
-Hành động:
-Bếp nhận kế hoạch, bắt đầu nấu.
-Tạo ra các Lô sản phẩm (log_batches) với type = PRODUCTION.
-Ban đầu log_batches.status = PROCESSING.
-Bắt buộc gắn log_batches.plan_id để biết lô này thuộc kế hoạch nào.
-Trong 1 production_plans sẽ chứa nhiều log_batch cần làm, khi toàn bộ log_batch DONE hết thì production_plans sẽ tự động chuyển thành DONE. Chỉ cần 1 trong những log_batch trong production_plan đó mà còn PROCESSING → production_plan vẫn còn ở status PROCESSING (ko cho phép chuyển sang DONE vì còn log_batch chưa sản xuất xong).
-Bước 3: Nhập kho Thành phẩm (Inbound)
-Actor: Warehouse
-Hành động:
-Chuyển log_batches.status → WAITING_TO_CONFIRM
-Nhập expiry_date (hoặc hệ thống tự tính dựa trên shelf_life_days của Product).
-DB Update (Auto): Hệ thống tự động tạo inventory_transactions (Type: IMPORT) → Tăng số lượng trong bảng inventories.
+Bước 1: Lập kế hoạch (Planning) 
+Actor: Manager (Role: MANAGER) 
+Tạo kế hoạch sản xuất mới (Create production_plan).
+Lưu ý: Ở bước này, Manager được phép sửa, xóa, hoặc thêm/bớt các chi tiết kế hoạch (production_plan_details).
+DB Update:
+Tạo bản ghi bảng production_plans (Status: DRAFT) (Swagger sử dụng:https://kitchencontrolbe.onrender.com/swagger-ui/index.html#/Production%20Plans%20API/createProductionPlan).
+🚫 update plan (Sub-flow)
+Actor: Manager
+Hành động: Bấm nút "Cập nhật kế hoạch" (chỉ áp dụng khi production_plans .status = DRAFT).
+DB Update:
+Update các thuộc tính của plan như thêm bớt sản phẩm, thêm bớt số lượng, thêm note(Swagger sử dụng:https://kitchencontrolbe.onrender.com/swagger-ui/index.html#/Production%20Plans%20API/updateProductionPlan).
+Lưu ý: chỉ được update khi plan còn là DRAFT
+🚫 Huỷ plan (Sub-flow)
+Actor: Manager
+Hành động: Bấm nút "Huỷ bản nháp kế hoạch" (chỉ áp dụng khi production_plans .status = DRAFT).
+DB Update:
+Update production_plans .status → CANCEL(Swagger sử dụng:https://kitchencontrolbe.onrender.com/swagger-ui/index.html#/Production%20Plans%20API/updateProductionPlanStatus).
+Lưu ý: chỉ được huỷ khi plan còn là DRAFT
+Bước 2: Duyệt kế hoạch 
+Actor: Manager (Role: MANAGER) 
+Xem xét và bấm duyệt kế hoạch (Confirm production plan).
+Hệ thống tự động: Kiểm tra tồn kho nguyên liệu. 
+DB Update:
+Nếu nguyên liệu đủ điều kiện: Update production_plans.status: DRAFT → WAITING(Swagger sử dụng:https://kitchencontrolbe.onrender.com/swagger-ui/index.html#/Production%20Plans%20API/updateProductionPlanStatus).
+Bước 3: Bếp nhận & Bắt đầu sản xuất (Production Initiation) 
+gửi 1 list log batch request về server
+Actor: Central Kitchen (Role: CENTRAL_KITCHEN) 
+Mở danh sách kế hoạch sản xuất đang chờ xử lý (Kế hoạch có status = WAITING).
+Nhấn nút "Thực thi sản xuất".
+Màn hình popup hiện lên để cho bếp quyết định phân kế hoạch này thành bao nhiêu lô (tức là tạo nhiều lô cùng lúc và các lô này là cố định cho plan này về sau). 
+Bấm "Bắt đầu sản xuất" (Start production) để tạo ra các log batch sản xuất mới. 
+DB Update:
+Update production_plans.status: WAITING→ PROCESSING.
+Tạo các bản ghi lô sản xuất trong bảng log_batches (kèm thông tin: type = PRODUCTION, status = PROCESSING, plan_id = production_plan.id).
+Bước 4: Xuất kho nguyên liệu cho sản xuất (Material Allocation) Actor: Warehouse Keeper (Role: WAREHOUSE_KEEPER) Hành động:
+Truy cập vào màn hình "Material Allocation" (Cấp phát nguyên liệu).
+Hệ thống hiển thị định mức nguyên liệu cần thiết cho từng batch (dựa trên dữ liệu từ bảng recipes và recipe_details). (Ví dụ: Batch 101 cần 5kg Chicken và 200g Salt).
+Hệ thống tự động chạy thuật toán FEFO (First Expired First Out) bằng cách truy vấn inventories JOIN log_batches ORDER BY expiry_date ASC để đề xuất lô nguyên liệu sẽ xuất. (Ví dụ: Đề xuất xuất Chicken - Lô A: 3kg, Lô B: 2kg).
+Warehouse Keeper kiểm tra và có 2 lựa chọn:
+Case A (Chấp nhận đề xuất): Bấm "Confirm Allocation".
+Case B (Phân bổ thủ công): Tự chọn lại lô nguyên liệu xuất kho theo thực tế, sau đó bấm "Confirm Allocation". 
+DB Update (Quan trọng):
+Tạo bản ghi xuất kho trong bảng inventory_transactions (Type: EXPORT). (Ví dụ: transaction_id = 501, product = chicken, batch_id = 22, quantity = 3kg, note = "Production Batch 101").
+Update trừ tồn kho thực tế: inventories.quantity = inventories.quantity - quantity.
+Bước 5: Sản xuất từng lô(Batch Processing) 
+Actor: Central Kitchen (Role: CENTRAL_KITCHEN) Hành động:
+Tiến hành chế biến các lô đang sản xuất.
+Khi nấu xong một lô, thao tác xác nhận hoàn thành trên hệ thống. 
+DB Update:
+Update log_batches.status: PROCESSING → WAITING_TO_CONFIRM (Sau đó lô sẽ chuyển sang trạng thái WAITING_TO_CONFIRM để chờ thủ kho xác nhận).
+Bước 6: Nhập kho (Inbound Confirmation) 
+Actor: Warehouse (Role: WAREHOUSE) 
+Xem danh sách các lô đang chờ nhập kho (WAITING_TO_CONFIRM).
+Kiểm tra vật lý và bấm xác nhận nhập kho (Confirm inbound).
+ DB Update:
+Update log_batches.status: WAITING_TO_CONFIRM → DONE.
+Hệ thống tự động tạo bản ghi trong bảng inventory_transactions (type = IMPORT)→ Tăng số lượng trong bảng inventories.
+⚙️ Logic hoàn thành Kế hoạch sản xuất (Auto-Completion Logic) 
+Actor: System
+Hệ thống tự động kiểm tra trạng thái của tất cả các batch thuộc một kế hoạch.
+DB Update:
+IF tất cả log_batches.status == DONE→ Update production_plans.status = DONE.
+IF tất cả log_batches.status == DONE/DAMAGED→ Update production_plans.status = COMPLETE_ONE_SECTION. (PARTIAL COMPLETION)
+IF vẫn còn lô ở trạng thái PROCESSING hoặc WAITING_TO_CONFIRM → Giữ nguyên production_plans.status = PROCESSING.
 
 FLOW 3: QUY TRÌNH NHẬP MUA NGUYÊN LIỆU (PROCUREMENT)
-Bước 1: Mua hàng & Nhận hàng
+Bước 1: Mua hàng & Nhận hàng ( đây là hành động ở ngoài không ảnh có trong hệ thống)
 Actor: Warehouse.
 Hành động: Mua nguyên vật liệu (Raw Material) từ nhà cung cấp bên ngoài mang về kho.
+
 Bước 2: Ghi nhận Lô hàng (Recording)
 Actor: Warehouse.
 Hành động: Tạo mới log_batches.
@@ -101,11 +201,11 @@ Logic Hệ thống:
 Ngay khi log_batches (Purchase) được lưu với status DONE.
 Hệ thống tự động tạo inventory_transactions (Type: IMPORT).
 Cộng quantity vào bảng inventories.
- 
+
 FLOW 4: QUY TRÌNH KIỂM SOÁT VÀ XUẤT HỦY HÀNG HẾT HẠN (WASTE MANAGEMENT)
 Bước 1: Quét tự động và "Đóng băng" lô hàng (System Automation)
 Actor: Hệ thống (Cron-Job chạy ngầm lúc 00:01 sáng mỗi ngày).
-Hành động: * Hệ thống quét bảng log_batches kết hợp với bảng inventories.
+Hành động: Hệ thống quét bảng log_batches kết hợp với bảng inventories.
 Nó sẽ tìm những lô hàng thỏa mãn 2 điều kiện: Đã qua Hạn sử dụng (expiry_date < CURRENT_DATE) VÀ Số lượng trong kho vẫn còn (quantity > 0).
 DB Update:
 Cập nhật log_batches.status = WAITING_TO_CANCEL (Chờ xuất hủy).
@@ -122,9 +222,27 @@ DB Update:
 Bảng log_batches: Cập nhật status = DAMAGED(nhằm mục đích đóng sổ vĩnh viễn vòng đời của lô hàng này).
 Bảng inventory_transactions: Tạo một bản ghi mới (Type: EXPORT, Note: "Thủ kho xác nhận xuất hủy hàng hết hạn", liên kết đúng với batch_id vừa vứt).
 Bảng inventories: Trừ trực tiếp quantity của lô đó về 0 (Chính thức xóa sổ khỏi kho thực tế).
+Sử dụng /log-batches/{batchId}/expire để đánh dấu các lô bị hỏng xuất hiện lên màn hình của warehouse. Sau khi đánh dấu xong, sẽ tự động tạo ra 1 Report có type là  WASTE. Report này sẽ đc show lên màn hinh của Manager để cho Manager quản lí
 Bước 3: Ghi nhận hao phí tài chính (Financial Reporting)
 Actor: System (Tự động chạy ngầm ngay sau Bước 2).
 Hành động: Hệ thống tổng hợp lại số lượng hàng vừa vứt đi để báo cáo thiệt hại.
 DB Update:
 Tạo bản ghi vào bảng reports (hoặc waste_logs).
 Lưu các thông tin: Type = WASTE, Mã nguyên liệu, Số lượng hủy. Cuối tháng Manager nhìn vào bảng report này sẽ biết nhà hàng đã ném vào thùng rác bao nhiêu tiền để điều chỉnh lại Kế hoạch mua hàng (Flow 3) cho sát thực tế hơn.
+📊 Báo cáo (Reporting)
+ℹ️ Lưu ý
+Thay đổi chiến lược báo cáo: Bỏ báo cáo kho phức tạp (tồn đầu kỳ, tồn cuối kỳ, tổng nhập, tổng xuất). Toàn bộ báo cáo xoay quanh Order và Receipt — đơn giản, chính xác, dễ truy vấn.
+
+1. Thống kê theo cửa hàng
+•        Tổng số đơn hàng và tổng sản phẩm đã giao theo từng Store.
+•        Xác định store nào đặt nhiều nhất, store nào có tỷ lệ đơn thiếu/hỏng cao.
+2. Thống kê giá trị đơn hàng
+•        Tổng số đơn, tổng sản phẩm, giá trị hàng hóa trao đổi.
+•        Công thức: order_details.price × order_details.quantity (dù nội bộ không thanh toán tiền mặt).
+3. Hiệu suất giao hàng
+•        Số lần giao trung bình trên mỗi đơn hàng = COUNT(receipts WHERE type = EXPORT) / COUNT(orders).
+•        Chỉ số này cao → store hay đặt đơn lớn phải chia nhỏ nhiều lần → xem xét lại hạn mức đặt hàng hoặc năng lực sản xuất.
+4. Hao hụt & Chất lượng kho
+•        Tổng đơn PARTIAL_DELIVERED, tổng sản phẩm ghi vào waste_logs.
+Tỷ lệ hàng hủy và hàng thiếu → đánh giá chất lượng dự báo sản xuất và bảo quản kho.
+

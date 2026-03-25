@@ -1,10 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getDeliveriesByShipperId, updateDeliveryStatus, completeOrder, updateOrderStatus, getReceiptsByOrderId } from '../../data/api';
+import { 
+  getDeliveriesByShipperId, 
+  updateDeliveryStatus, 
+  updateOrderStatus, 
+  getReceiptsByOrderId,
+  updateReceiptStatus,
+  createWasteLog,
+  getOrderById,
+  createAdditionalOrder
+} from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { EmptyState } from '../../components/common/EmptyState';
+import { Badge } from '../../components/ui/badge';
 import {
   Dialog,
   DialogContent,
@@ -13,311 +23,413 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
-import {
-  Truck,
-  MapPin,
-  Package,
+import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group';
+import { Label } from '../../components/ui/label';
+import { Input } from '../../components/ui/input';
+import { 
+  Truck, 
+  MapPin, 
+  CheckCircle2, 
+  Clock, 
   Navigation,
-  CheckCircle2,
-  AlertTriangle,
   Loader2,
+  RefreshCw,
+  ClipboardList,
+  AlertTriangle,
+  PackageX
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function MyTrips() {
   const { user } = useAuth();
   const [deliveries, setDeliveries] = useState([]);
-  const [orderReceipts, setOrderReceipts] = useState({}); // { orderId: [receipts] }
   const [loading, setLoading] = useState(true);
-  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [processingId, setProcessingId] = useState(null);
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isStarting, setIsStarting] = useState(null);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [orderOutcomes, setOrderOutcomes] = useState({}); // { orderId: { damagedProducts: { productId: boolean }, details: [], receipts: [], storeId: number } }
 
-  const reloadData = async () => {
-    if (!user?.user_id) { setLoading(false); return; }
+  const fetchData = useCallback(async () => {
+    if (!user?.user_id) return;
     setLoading(true);
     try {
       const data = await getDeliveriesByShipperId(user.user_id);
-      const deliveryList = Array.isArray(data) ? data : [];
-      setDeliveries(deliveryList);
-
-      // Fetch receipts for all orders in these deliveries
-      const orderIds = [...new Set(deliveryList.flatMap(d => (d.orders || []).map(o => o.order_id)))];
-      const receiptsData = {};
-      await Promise.all(orderIds.map(async (id) => {
-        try {
-          const res = await getReceiptsByOrderId(id);
-          receiptsData[id] = Array.isArray(res) ? res : [];
-        } catch (e) {
-          receiptsData[id] = [];
-        }
-      }));
-      setOrderReceipts(receiptsData);
+      setDeliveries(Array.isArray(data) ? data : []);
     } catch (error) {
-      setDeliveries([]);
+      toast.error('Lỗi tải danh sách vận chuyển: ' + error.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.user_id]);
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-  useEffect(() => { reloadData(); }, [user?.user_id]);
-
-  /**
-   * Xác định trạng thái của delivery dựa trên orders bên trong
-   * (DeliveryResponse không có field `status` riêng)
-   */
-  const getDeliveryStatus = (delivery) => {
-    const orders = delivery.orders || [];
-    if (orders.length === 0) return 'WAITING';
-    if (orders.every(o => o.status === 'DONE' || o.status === 'DAMAGED' || o.status === 'CANCELED' || o.status === 'PARTIAL_DELIVERED')) return 'DONE';
-    if (orders.some(o => o.status === 'DELIVERING')) return 'DELIVERING';
-    return 'WAITING';
-  };
-
-  const handleStartDelivery = async (deliveryId, orders) => {
-    setIsStarting(deliveryId);
+  const handleStartDelivery = async (delivery) => {
+    setProcessingId(delivery.delivery_id);
     try {
-      // Check if ALL orders are DISPATCHED and have COMPLETED receipts
-      const readyOrders = orders.filter(o => {
-        const hasCompletedReceipt = (orderReceipts[o.order_id] || []).some(r => r.status === 'COMPLETED');
-        return o.status === 'DISPATCHED' && hasCompletedReceipt;
+      const orderIds = (delivery.orders || []).map(o => o.order_id);
+      
+      // Update delivery → DELIVERING. Order vẫn ở DISPATCHED.
+      await updateDeliveryStatus(delivery.delivery_id, 'DELIVERING');
+      
+      // Chuyển tất cả Phiếu xuất (READY) của các đơn trong chuyến sang COMPLETED
+      // -> Đây là trigger để backend TRỪ KHO thực tế.
+      const receiptPromises = orderIds.map(async (orderId) => {
+        try {
+          const receipts = await getReceiptsByOrderId(orderId).catch(() => []);
+          const readyReceipts = receipts.filter(r => r.status === 'READY');
+          for (const r of readyReceipts) {
+            await updateReceiptStatus(r.receipt_id, 'COMPLETED');
+          }
+        } catch (e) {
+          console.warn(`Failed to update receipts for order #${orderId}:`, e.message);
+        }
+      });
+      await Promise.all(receiptPromises);
+
+      toast.success('Đã bắt đầu chuyến giao hàng và xác nhận xuất kho!');
+      fetchData();
+    } catch (error) {
+      toast.error('Lỗi: ' + error.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleOpenCompleteDialog = async (delivery) => {
+    setProcessingId(delivery.delivery_id);
+
+    // Fetch tất cả orders song song thay vì tuần tự
+    const results = await Promise.all(
+      (delivery.orders || []).map(async (order) => {
+        const receipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
+        const exportReceipts = receipts.filter(r => r.type === 'EXPORT' || !r.type);
+
+        let detailsToUse = order.order_details || [];
+        if (detailsToUse.length === 0) {
+          try {
+            const fetchedDetails = await getOrderDetailsByOrderId(order.order_id);
+            if (fetchedDetails && fetchedDetails.length > 0) detailsToUse = fetchedDetails;
+          } catch (e) {
+            console.error(`Failed to fetch details for order #${order.order_id}:`, e);
+          }
+        }
+
+        const finalDetails = detailsToUse.length > 0 ? detailsToUse : (exportReceipts[0]?.receipt_details || []);
+        const initialDamagedProducts = {};
+        finalDetails.forEach(d => { initialDamagedProducts[d.product_id] = false; });
+
+        return {
+          orderId: order.order_id,
+          outcome: {
+            damagedProducts: initialDamagedProducts,
+            details: finalDetails,
+            receipts: exportReceipts,
+            storeId: order.store?.storeId || order.store_id || order.sender_id,
+          }
+        };
+      })
+    );
+
+    const initialOutcomes = {};
+    results.forEach(({ orderId, outcome }) => { initialOutcomes[orderId] = outcome; });
+
+    setOrderOutcomes(initialOutcomes);
+    setProcessingId(null);
+    setSelectedDelivery(delivery);
+    setShowCompleteDialog(true);
+  };
+
+  const handleFinalizeTrip = async () => {
+    if (!selectedDelivery) return;
+    setProcessingId(selectedDelivery.delivery_id);
+    try {
+      for (const orderId in orderOutcomes) {
+        const outcome = orderOutcomes[orderId];
+        const damagedProductIds = Object.keys(outcome.damagedProducts).filter(id => outcome.damagedProducts[id]);
+        const isAnyDamaged = damagedProductIds.length > 0;
+
+        if (isAnyDamaged) {
+          // Chỉ đơn hàng có sản phẩm hỏng mới update status → DAMAGED
+          try {
+            await updateOrderStatus(parseInt(orderId), 'DAMAGED', 'Shipper báo hỏng sản phẩm');
+          } catch (e) {
+            console.warn(`Order #${orderId} DAMAGED update failed:`, e);
+          }
+
+          // Tạo waste log cho từng sản phẩm hỏng
+          const damagedDetails = outcome.details.filter(d => outcome.damagedProducts[d.product_id]);
+          for (const item of damagedDetails) {
+            const receipt = outcome.receipts[0];
+            const tx = (receipt?.inventory_transactions || []).find(t => t.product_id === item.product_id);
+            await createWasteLog({
+              productId: item.product_id,
+              batchId: tx?.batch_id || 0,
+              orderId: parseInt(orderId),
+              quantity: item.quantity,
+              wasteType: 'DAMAGED_SHIPPING',
+              note: `Hang hong SP #${item.product_id} trong don #${orderId}`
+            }).catch(e => console.error('Waste log failed:', e));
+          }
+
+          // Tạo đơn bù SUPPLEMENT cho sản phẩm hỏng
+          toast.loading(`Đang tạo đơn bù cho #${orderId}...`, { id: `supp-${orderId}` });
+          const newOrder = await createAdditionalOrder(parseInt(orderId), {
+            storeId: outcome.storeId,
+            type: 'SUPPLEMENT',
+            comment: `SUPPLEMENT - Shipper bao hong san pham - don #${orderId}`,
+            orderDetails: damagedDetails.map(d => ({
+              productId: d.product_id,
+              quantity: d.quantity
+            }))
+          }).catch(e => {
+            console.error('Shipper auto-supplement failed:', e);
+            toast.error(`Không thể tạo đơn bù #${orderId}: ` + e.message, { id: `supp-${orderId}` });
+            return null;
+          });
+
+          if (newOrder && newOrder.order_id) {
+            toast.success(`Đã tạo đơn bù #${newOrder.order_id} thành công!`, { id: `supp-${orderId}` });
+          } else {
+            toast.dismiss(`supp-${orderId}`);
+          }
+        }
+        // Đơn bình thường (không hỏng): GIỮ NGUYÊN trạng thái DELIVERING.
+        // Store sẽ xác nhận → DONE.
+      }
+
+      // Update delivery status → DONE (chuyến đi kết thúc, các đơn hàng bên trong có trạng thái riêng biệt)
+      // Chú ý: Backend KHÔNG CÓ trạng thái DAMAGED cho delivery, chỉ có WAITING | DELIVERING | DONE | CANCEL
+      await updateDeliveryStatus(selectedDelivery.delivery_id, 'DONE').catch(err => {
+        console.warn('Delivery status update failed:', err);
+        throw err; // Ném lỗi để UI hiện thông báo lỗi rõ ràng nếu API thật sự fail
       });
 
-      if (readyOrders.length < orders.length) {
-        toast.error(`Có đơn hàng chưa được Kho xuất hàng (COMPLETED & DISPATCHED). Vui lòng chờ Kho Hoàn tất Xuất kho trước.`);
-        setIsStarting(null);
-        return;
-      }
-
-      // 1. Update delivery status to DELIVERING using the correct API
-      await updateDeliveryStatus(deliveryId, 'DELIVERING');
-      
-      // 2. Also update all orders in this delivery to DELIVERING status
-      // to ensure consistency across the app for shippers and customers.
-      await Promise.all(orders.map(o => 
-        updateOrderStatus(o.order_id, 'DELIVERING', o.store_id || '0').catch(e => console.error(e))
-      ));
-
-      toast.success('Đã bắt đầu chuyến giao hàng!');
-      reloadData();
+      toast.success('Chuyến hàng đã hoàn tất! Chờ cửa hàng xác nhận các đơn bình thường.');
     } catch (error) {
-      toast.error('Lỗi khi bắt đầu giao hàng: ' + error.message);
+      console.error('Finalize trip error:', error);
+      toast.error('Có lỗi xảy ra: ' + error.message);
     } finally {
-      setIsStarting(null);
-    }
-  };
-
-
-  const handleCompleteOrder = async (status) => {
-    if (!selectedOrder) return;
-    setIsUpdating(true);
-    try {
-      if (status === 'DONE') {
-        // PATCH /orders/{id}/complete
-        await completeOrder(selectedOrder.order_id);
-        toast.success(`Đã giao thành công đơn hàng #${selectedOrder.order_id}`);
-      } else {
-        // DAMAGED — dùng updateOrderStatus
-        await updateOrderStatus(selectedOrder.order_id, 'DAMAGED', selectedOrder.store_id);
-        toast.warning(`Đã báo cáo đơn hàng #${selectedOrder.order_id} bị hư hỏng`);
-      }
       setShowCompleteDialog(false);
-      setSelectedOrder(null);
-      reloadData();
-    } catch (e) {
-      toast.error(e.message || 'Cập nhật thất bại');
-    } finally {
-      setIsUpdating(false);
+      setProcessingId(null);
+      fetchData();
     }
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('vi-VN', {
-      weekday: 'short', day: '2-digit', month: '2-digit',
-    });
-  };
-
-  const DeliveryCard = ({ delivery, showActions = true }) => {
-    const deliveryStatus = getDeliveryStatus(delivery);
-    const isDeliveryStarting = isStarting === delivery.delivery_id;
+  const DeliveryCard = ({ delivery }) => {
+    const isProcessing = processingId === delivery.delivery_id;
+    const canStart = delivery.status === 'WAITING';
+    const canComplete = delivery.status === 'DELIVERING';
+    const isDone = delivery.status === 'DONE';
+    const orders = delivery.orders || [];
 
     return (
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                <Truck className="h-6 w-6 text-primary" />
+      <Card className={`overflow-hidden border-l-4 ${canComplete ? 'border-l-blue-500' : isDone ? 'border-l-green-500' : 'border-l-slate-300'}`}>
+        <CardHeader className="bg-slate-50/50 pb-3">
+          <div className="flex justify-between items-start">
+            <div className="flex items-center gap-2">
+              <div className={`p-2 rounded-lg ${isDone ? 'bg-green-100' : 'bg-blue-100'}`}>
+                <Truck className={`h-5 w-5 ${isDone ? 'text-green-600' : 'text-blue-600'}`} />
               </div>
               <div>
-                <CardTitle className="text-base">Chuyến #{delivery.delivery_id}</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  {formatDate(delivery.delivery_date)} • {(delivery.orders || []).length} điểm giao
-                </p>
+                <CardTitle className="text-lg">Chuyến #{delivery.delivery_id}</CardTitle>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {delivery.delivery_date || 'Hôm nay'}
+                  </span>
+                </div>
               </div>
             </div>
-            <StatusBadge status={deliveryStatus} type="delivery" />
+            <StatusBadge status={delivery.status} type="delivery" />
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="pt-4 space-y-4">
           <div className="space-y-3">
-            {(delivery.orders || []).map((order, index) => (
-              <div key={order.order_id} className="p-3 bg-muted/50 rounded-lg space-y-2">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-6 w-6 items-center justify-center rounded-full border text-sm font-medium">
-                      {index + 1}
-                    </div>
-                    <div>
-                      <p className="font-medium">{order.store_name}</p>
-                      <p className="text-sm text-muted-foreground flex items-center gap-1">
-                        <MapPin className="h-3 w-3" />
-                        Cửa hàng #{order.store_id}
-                      </p>
-                    </div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <ClipboardList className="h-4 w-4" />
+              Đơn hàng ({orders.length}):
+            </div>
+            <div className="space-y-2">
+              {orders.map(order => (
+                <div key={order.order_id} className="flex flex-col p-3 rounded-lg border bg-white shadow-sm">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-bold text-sm">Đơn #{order.order_id}</span>
+                    <Badge variant="outline" className="text-[10px] h-5">{order.status || 'DISPATCHED'}</Badge>
                   </div>
-                  {showActions && order.status === 'DELIVERING' && (
-                    <Button
-                      size="sm"
-                      onClick={() => { setSelectedOrder(order); setShowCompleteDialog(true); }}
-                    >
-                      Hoàn thành
-                    </Button>
-                  )}
-                  {(order.status === 'DONE' || order.status === 'DAMAGED' || order.status === 'DISPATCHED') && (
-                    <StatusBadge status={order.status} type="order" />
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <MapPin className="h-3 w-3" />
+                    <span>{order.store_name || `Cửa hàng #${order.store_id || '...'}`}</span>
+                  </div>
+                  {(order.order_details || []).length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {(order.order_details || []).map((od, idx) => (
+                        <Badge key={idx} variant="secondary" className="text-[10px]">
+                          {od.product_name} x{od.quantity}
+                        </Badge>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {(order.order_details || []).map(detail => (
-                    <span
-                      key={detail.order_detail_id || detail.product_id}
-                      className="inline-flex items-center gap-1 text-xs bg-background px-2 py-1 rounded border shadow-sm"
-                    >
-                      <Package className="h-3 w-3 text-purple-500" />
-                      {detail.product_name || `SP #${detail.product_id}`} ×{detail.quantity}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
+              ))}
+              {orders.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">Không có đơn hàng trong chuyến này.</p>
+              )}
+            </div>
           </div>
 
-          {showActions && deliveryStatus === 'WAITING' && (() => {
-            const allReady = (delivery.orders || []).every(o => {
-              const receipts = orderReceipts[o.order_id] || [];
-              return o.status === 'DISPATCHED' && receipts.some(r => r.status === 'COMPLETED');
-            });
-
-            return (
-              <div className="flex justify-center mt-4">
-                <Button
-                  className="w-full sm:w-1/2 bg-blue-600 hover:bg-blue-700"
-                  onClick={() => handleStartDelivery(delivery.delivery_id, delivery.orders)}
-                  disabled={isDeliveryStarting || !allReady}
-                >
-                  {isDeliveryStarting
-                    ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang xử lý...</>
-                    : !allReady
-                      ? <><Navigation className="mr-2 h-4 w-4 opacity-50" /> Chờ kho xuất hàng</>
-                      : <><Navigation className="mr-2 h-4 w-4" /> Nhận và giao</>
-                  }
-                </Button>
+          <div className="pt-2">
+            {canStart && (
+              <Button 
+                className="w-full bg-blue-600 hover:bg-blue-700 h-10 font-bold"
+                onClick={() => handleStartDelivery(delivery)}
+                disabled={isProcessing}
+              >
+                {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Navigation className="h-4 w-4 mr-2" />}
+                Nhận và giao
+              </Button>
+            )}
+            {canComplete && (
+              <Button 
+                className="w-full bg-green-600 hover:bg-green-700 h-10 font-bold"
+                onClick={() => handleOpenCompleteDialog(delivery)}
+                disabled={isProcessing}
+              >
+                {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                Hoàn tất chuyến đi & Đối soát
+              </Button>
+            )}
+            {isDone && (
+              <div className="w-full flex items-center justify-center p-2 bg-green-50 text-green-700 rounded border border-green-100 text-sm font-medium gap-2">
+                <CheckCircle2 className="h-4 w-4" /> Đã hoàn thành nhiệm vụ
               </div>
-            );
-          })()}
+            )}
+          </div>
         </CardContent>
       </Card>
     );
   };
 
-  if (loading) {
+  if (loading && deliveries.length === 0) {
     return (
-      <div className="p-6 flex items-center justify-center min-h-[200px]">
-        <p className="text-muted-foreground">Đang tải...</p>
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+        <p className="text-muted-foreground animate-pulse">Đang tải...</p>
       </div>
     );
   }
-
-  if (deliveries.length === 0) {
-    return (
-      <div className="p-6">
-        <EmptyState icon={Truck} title="Chưa có chuyến giao hàng" description="Bạn chưa được phân công chuyến giao hàng nào" />
-      </div>
-    );
-  }
-
-  const deliveringTrips = deliveries.filter(d => getDeliveryStatus(d) === 'DELIVERING');
-  const waitingTrips = deliveries.filter(d => getDeliveryStatus(d) === 'WAITING');
-  const doneTrips = deliveries.filter(d => getDeliveryStatus(d) === 'DONE');
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Chuyến hàng của tôi</h1>
-        <p className="text-muted-foreground">Quản lý và theo dõi các chuyến giao hàng</p>
+    <div className="p-4 sm:p-6 space-y-6 max-w-2xl mx-auto pb-20">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Lịch trình của tôi</h1>
+          <p className="text-sm text-muted-foreground">Quản lý các chuyến đi được phân công</p>
+        </div>
+        <Button size="icon" variant="outline" onClick={fetchData} className="rounded-full">
+          <RefreshCw className="h-4 w-4" />
+        </Button>
       </div>
 
-      {deliveringTrips.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Navigation className="h-5 w-5 text-blue-500" /> Đang giao hàng
-          </h2>
-          {deliveringTrips.map(d => <DeliveryCard key={d.delivery_id} delivery={d} />)}
-        </div>
-      )}
-
-      {waitingTrips.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Package className="h-5 w-5 text-yellow-500" /> Chờ nhận hàng
-          </h2>
-          {waitingTrips.map(d => <DeliveryCard key={d.delivery_id} delivery={d} />)}
-        </div>
-      )}
-
-      {doneTrips.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <CheckCircle2 className="h-5 w-5 text-green-500" /> Đã hoàn thành
-          </h2>
-          {doneTrips.map(d => <DeliveryCard key={d.delivery_id} delivery={d} showActions={false} />)}
+      {deliveries.length === 0 ? (
+        <EmptyState
+          title="Không có chuyến đi"
+          description="Bạn chưa được phân công chuyến đi nào."
+          icon={Truck}
+        />
+      ) : (
+        <div className="grid gap-6">
+          {deliveries.filter(d => d.status === 'DELIVERING').map(d => <DeliveryCard key={d.delivery_id} delivery={d} />)}
+          {deliveries.filter(d => d.status === 'WAITING' || d.status === 'READY' || d.status === 'PROCESSING').map(d => <DeliveryCard key={d.delivery_id} delivery={d} />)}
+          {deliveries.filter(d => d.status === 'DONE').slice(0, 3).map(d => <DeliveryCard key={d.delivery_id} delivery={d} />)}
         </div>
       )}
 
       <Dialog open={showCompleteDialog} onOpenChange={setShowCompleteDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Hoàn thành giao hàng</DialogTitle>
+            <DialogTitle>Đối soát & Hoàn tất chuyến #{selectedDelivery?.delivery_id}</DialogTitle>
             <DialogDescription>
-              Xác nhận trạng thái đơn hàng #{selectedOrder?.order_id} — {selectedOrder?.store_name}
+              Đánh dấu nếu có đơn vị từ chối/hỏng. Các đơn hàng bình thường sẽ giữ trạng thái Đang Giao cho đến khi Cửa hàng xác nhận.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 py-4">
-            <Button
-              variant="outline"
-              className="h-24 flex-col gap-2 border-green-400 hover:bg-green-50"
-              onClick={() => handleCompleteOrder('DONE')}
-              disabled={isUpdating}
-            >
-              <CheckCircle2 className="h-8 w-8 text-green-600" />
-              <span>Giao thành công</span>
-            </Button>
-            <Button
-              variant="outline"
-              className="h-24 flex-col gap-2 border-red-400 hover:bg-red-50"
-              onClick={() => handleCompleteOrder('DAMAGED')}
-              disabled={isUpdating}
-            >
-              <AlertTriangle className="h-8 w-8 text-red-500" />
-              <span>Hàng hư hỏng</span>
-            </Button>
+
+          <div className="space-y-4 py-4">
+            {selectedDelivery?.orders.map(order => {
+              const outcome = orderOutcomes[order.order_id] || { damagedProducts: {} };
+              const products = outcome.details || [];
+              
+              return (
+                <div key={order.order_id} className="p-4 rounded-xl border bg-slate-50/50 space-y-3">
+                  <div className="flex justify-between items-center pb-2 border-b">
+                    <span className="font-bold text-indigo-900 underline underline-offset-4">Đơn hàng #{order.order_id}</span>
+                    <Badge variant="outline" className="bg-white">{order.store_name}</Badge>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                      <ClipboardList className="h-3 w-3" /> Chi tiết sản phẩm:
+                    </p>
+                    {products.map(product => {
+                      const isDamaged = outcome.damagedProducts[product.product_id];
+                      return (
+                        <div key={product.product_id} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
+                          <span className={isDamaged ? "text-red-600 font-medium" : ""}>
+                            {product.product_name} <span className="text-muted-foreground text-xs">x{product.quantity}</span>
+                          </span>
+                          <Button 
+                            variant={isDamaged ? 'destructive' : 'outline'}
+                            size="sm"
+                            onClick={() => setOrderOutcomes(prev => {
+                              const orderOutcome = prev[order.order_id];
+                              return {
+                                ...prev,
+                                [order.order_id]: {
+                                  ...orderOutcome,
+                                  damagedProducts: {
+                                    ...orderOutcome.damagedProducts,
+                                    [product.product_id]: !isDamaged
+                                  }
+                                }
+                              };
+                            })}
+                            className={`h-7 px-2 text-[10px] ${isDamaged ? 'bg-red-600 hover:bg-red-700 font-bold' : 'text-slate-500 border-slate-200'}`}
+                          >
+                            {isDamaged ? (
+                              <><PackageX className="h-3 w-3 mr-1" /> Hỏng</>
+                            ) : (
+                              <><PackageX className="h-3 w-3 mr-1" /> Báo hỏng</>
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {Object.values(outcome.damagedProducts).some(v => v) && (
+                    <div className="p-2 bg-red-50 rounded border border-red-100 flex gap-2">
+                      <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
+                      <p className="text-[10px] text-red-800">
+                        Sản phẩm đánh dấu hỏng sẽ được tạo đơn bù SUPPLEMENT tự động.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
+
           <DialogFooter>
-            {isUpdating && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-            <Button variant="ghost" onClick={() => setShowCompleteDialog(false)} disabled={isUpdating}>Hủy</Button>
+            <Button variant="outline" onClick={() => setShowCompleteDialog(false)}>Đóng</Button>
+            <Button 
+              className="bg-green-600 hover:bg-green-700" 
+              onClick={handleFinalizeTrip}
+              disabled={!!processingId}
+            >
+              {processingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+              Xác nhận & Hoàn tất
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

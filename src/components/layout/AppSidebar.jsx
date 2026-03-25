@@ -48,7 +48,6 @@ const menuByRole = {
   1: [
     { title: 'Bảng điều khiển', url: '/admin', icon: LayoutDashboard },
     { title: 'Quản lý công thức', url: '/admin/recipes', icon: BookOpen },
-    { title: 'Kế hoạch sản xuất', url: '/admin/plans', icon: Calendar },
     { title: 'Quản lý sản phẩm', url: '/admin/products', icon: Package },
     { title: 'Quản lý người dùng', url: '/admin/users', icon: Users },
     { title: 'Báo cáo', url: '/admin/reports', icon: BarChart3 },
@@ -80,6 +79,7 @@ const menuByRole = {
   6: [
     { title: 'Chuyến hàng của tôi', url: '/shipper', icon: Truck },
     { title: 'Bản đồ giao hàng', url: '/shipper/map', icon: MapPin },
+    { title: 'Lịch sử giao hàng', url: '/shipper/history', icon: History },
   ],
   // Warehouse (Role 7)
   7: [
@@ -88,6 +88,7 @@ const menuByRole = {
     { title: 'Nhập mua Nguyên liệu', url: '/warehouse/procurement', icon: ShoppingCart },
     { title: 'Nhập kho Thành phẩm', url: '/warehouse/inbound', icon: ArrowDownToLine },
     { title: 'Xuất kho', url: '/warehouse/outbound', icon: Truck },
+    { title: 'Phân bổ Nguyên liệu', url: '/warehouse/material-allocation', icon: Warehouse },
     { title: 'Hủy hàng', url: '/warehouse/waste', icon: FileWarning },
   ],
 };

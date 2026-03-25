@@ -26,6 +26,7 @@ import Deliveries from "./pages/coordinator/Deliveries";
 // Manager pages
 import ManagerDashboard from "./pages/manager/ManagerDashboard";
 import ProductionPlanning from "./pages/manager/ProductionPlanning";
+import ManagerReports from "./pages/manager/ManagerReports";
 
 // Kitchen pages
 import KitchenDashboard from "./pages/kitchen/Dashboard";
@@ -38,6 +39,7 @@ import RecipeViewer from "./pages/kitchen/RecipeViewer";
 // Shipper pages
 import MyTrips from "./pages/shipper/MyTrips";
 import DeliveryMap from "./pages/shipper/DeliveryMap";
+import ShipperHistory from "./pages/shipper/History";
 
 // Admin pages
 import AdminDashboard from "./pages/admin/Dashboard";
@@ -54,7 +56,8 @@ import WarehouseProcurement from "./pages/warehouse/Procurement";
 import WarehouseWaste from "./pages/warehouse/Waste";
 import WarehouseReports from "./pages/warehouse/Reports";
 import InventoryHistory from "./pages/warehouse/InventoryHistory";
-
+import Inpound from "./pages/warehouse/Inbound";
+import MaterialAllocation from "./pages/warehouse/MaterialAllocationPage";
 const queryClient = new QueryClient();
 
 // Placeholder component for pages not yet implemented
@@ -100,6 +103,7 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.MANAGER, ROLE_ID.ADMIN]}><Outlet /></ProtectedRoute>}>
                   <Route path="/manager" element={<ManagerDashboard />} />
                   <Route path="/manager/planning" element={<ProductionPlanning />} />
+                  <Route path="/manager/reports" element={<ManagerReports />} />
                 </Route>
 
                 {/* Kitchen routes */}
@@ -114,6 +118,7 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.SHIPPER]}><Outlet /></ProtectedRoute>}>
                   <Route path="/shipper" element={<MyTrips />} />
                   <Route path="/shipper/map" element={<DeliveryMap />} />
+                  <Route path="/shipper/history" element={<ShipperHistory />} />
                 </Route>
 
                 {/* Warehouse routes (ID 7) */}
@@ -122,17 +127,17 @@ const App = () => (
                   <Route path="inventory" element={<WarehouseInventory />} />
                   <Route path="inventory-history" element={<InventoryHistory />} />
                   <Route path="procurement" element={<WarehouseProcurement />} />
-                  <Route path="inbound" element={<BatchLog status="WAITING_TO_CONFIRM" />} />
+                  <Route path="inbound" element={<Inpound status="WAITING_TO_CONFIRM" />} />
                   <Route path="outbound" element={<WarehouseOutbound />} />
                   <Route path="waste" element={<WarehouseWaste />} />
                   <Route path="reports" element={<WarehouseReports />} />
+                  <Route path="material-allocation" element={<MaterialAllocation />} />
                 </Route>
 
                 {/* Admin routes */}
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.ADMIN, ROLE_ID.MANAGER]}><Outlet /></ProtectedRoute>}>
                   <Route path="/admin" element={<AdminDashboard />} />
                   <Route path="/admin/recipes" element={<Recipes />} />
-                  <Route path="/admin/plans" element={<Plans />} />
                   <Route path="/admin/products" element={<Products />} />
                   <Route path="/admin/users" element={<Users />} />
                   <Route path="/admin/reports" element={<ComingSoon title="Báo cáo" />} />
