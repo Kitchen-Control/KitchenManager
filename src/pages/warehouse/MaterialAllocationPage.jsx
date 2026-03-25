@@ -1,216 +1,309 @@
 import React, { useEffect, useState } from "react";
-import {
+import { useNavigate } from "react-router-dom";
+import { 
   getProductionPlans,
-  getMaterialRequirements,
-  getRawMaterialInventories,
-  createTransaction,
+  getMaterialRequirements, 
+  getInventories, 
+  getAllTransactions, // <--- Nhớ import hàm này vào nhé
+  createTransaction 
 } from "../../data/api";
-
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Badge } from "../../components/ui/badge";
-import { toast } from "sonner";
+import { toast } from "sonner"; 
+import { Loader2, ArrowLeft, AlertCircle, CheckCircle2, PackageCheck, Send } from "lucide-react";
 
 export default function MaterialAllocationPage() {
+  const navigate = useNavigate();
+
   const [plans, setPlans] = useState([]);
   const [inventories, setInventories] = useState([]);
-  
-  // SỬA: Dùng key phẳng "planId|productId|batchId" để tránh lỗi đè dữ liệu
+  const [loading, setLoading] = useState(true);
+  const [submittingId, setSubmittingId] = useState(null);
   const [allocations, setAllocations] = useState({});
-  const [editedMaterials, setEditedMaterials] = useState({});
 
   useEffect(() => {
-    fetchData();
+    fetchInitialData();
   }, []);
 
-  const fetchData = async () => {
-    try {
-      const planData = await getProductionPlans();
-      const waitingPlans = planData.filter(p => p.status?.toUpperCase() === "WAITING");
+  const getInvQuantity = (inv) => inv.quantity ?? inv.batch?.inventory?.quantity ?? inv.batch?.quantity ?? 0;
+  const getInvExpiryDate = (inv) => inv.expiryDate ?? inv.batch?.expiryDate ?? inv.batch?.inventory?.expiryDate;
 
-      const plansWithReq = await Promise.all(
+  const fetchInitialData = async () => {
+    try {
+      setLoading(true);
+      
+      // 1. Lấy song song Plans, Inventories và Transactions
+      const [allPlans, invData, allTxs] = await Promise.all([
+        getProductionPlans(),
+        getInventories(),
+        getAllTransactions().catch(err => {
+          console.warn("Không tải được lịch sử xuất kho:", err);
+          return [];
+        })
+      ]);
+
+      const waitingPlans = (allPlans || []).filter(p => p.status?.toUpperCase() === "WAITING");
+      
+      // Lọc sẵn các giao dịch XUẤT KHO liên quan đến Kế hoạch để dễ tính toán
+      const exportTxs = (allTxs || []).filter(tx => tx.type === "EXPORT" && tx.note?.startsWith("Production Plan"));
+
+      // 2. Map dữ liệu định mức và đối chiếu với Transactions
+      const plansWithReqs = await Promise.all(
         waitingPlans.map(async (plan) => {
-          const materials = await getMaterialRequirements(plan.planId);
-          return {
-            ...plan,
-            materials: (materials || []).map(m => ({
-              productId: m.productId,
-              productName: m.productName,
-              requiredQty: m.totalRequiredQuantity,
-              unit: m.unit
-            }))
-          };
+          const reqs = await getMaterialRequirements(plan.planId).catch(err => {
+            console.warn(`Plan ${plan.planId} chưa có định mức:`, err);
+            return [];
+          });
+
+          const processedReqs = reqs.map(req => {
+            // Lọc các lần xuất kho của đúng Kế hoạch này và đúng Mã nguyên liệu này
+            const relatedTxs = exportTxs.filter(tx => 
+              tx.productId === req.productId && 
+              tx.note === `Production Plan ${plan.planId}`
+            );
+
+            // Cộng dồn xem đã xuất được bao nhiêu rồi
+            const exportedQty = relatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
+            
+            // Số lượng cần xuất thêm = Định mức ban đầu - Đã xuất
+            const remainingQty = Math.max(0, req.totalRequiredQuantity - exportedQty);
+            const isCompleted = exportedQty >= req.totalRequiredQuantity;
+
+            return { ...req, exportedQty, remainingQty, isCompleted };
+          });
+
+          return { ...plan, materials: processedReqs || [] };
         })
       );
-      setPlans(plansWithReq);
 
-      const invData = await getRawMaterialInventories();
-      const invMap = {};
-      invData.forEach(inv => {
-        const pId = inv.product_id || inv.productId;
-        if (!pId) return;
-        if (!invMap[pId]) {
-          invMap[pId] = { productId: pId, productName: inv.product_name, batches: [] };
-        }
-        invMap[pId].batches.push({
-          batchId: inv.batch_id,
-          quantity: inv.quantity,
-          expiryDate: inv.expiry_date
-        });
+      // 3. ẨN NHỮNG KẾ HOẠCH ĐÃ HOÀN THÀNH 100%
+      const activePlans = plansWithReqs.filter(plan => {
+        if (plan.materials.length === 0) return false; // Kế hoạch không có nguyên liệu thì ẩn luôn
+        
+        // Kiểm tra xem có phải TẤT CẢ nguyên liệu đều đã completed không?
+        const isPlanFullyCompleted = plan.materials.every(req => req.isCompleted);
+        return !isPlanFullyCompleted; // Nếu chưa hoàn thành 100% thì mới giữ lại hiển thị
       });
-      setInventories(Object.values(invMap));
-    } catch (err) {
-      toast.error(err.message);
+
+      setPlans(activePlans);
+
+      const availableInvs = (invData || [])
+        .filter(inv => getInvQuantity(inv) > 0)
+        .sort((a, b) => new Date(getInvExpiryDate(a)) - new Date(getInvExpiryDate(b)));
+        
+      setInventories(availableInvs);
+
+    } catch (error) {
+      toast.error("Lỗi khi tải dữ liệu: " + error.message);
+      console.error(error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Hàm tính tổng đơn giản và chính xác
-  const getAllocatedSum = (planId, productId) => {
-    let total = 0;
-    const targetPlanId = String(planId);
-    const targetProductId = String(productId);
+  const getTotalAllocated = (planId, productId) => {
+    const prefix = `${planId}-${productId}-`;
+    return Object.keys(allocations)
+      .filter(key => key.startsWith(prefix))
+      .reduce((sum, key) => sum + (parseFloat(allocations[key]) || 0), 0);
+  };
 
+  const handleInputChange = (planId, productId, batchId, value, maxAvailable) => {
+    const key = `${planId}-${productId}-${batchId}`;
+    let val = value === "" ? "" : parseFloat(value);
+
+    if (val !== "" && val < 0) val = 0;
+    if (val !== "" && val > maxAvailable) val = maxAvailable;
+
+    setAllocations(prev => ({ ...prev, [key]: val }));
+  };
+
+  const handleExportSingleMaterial = async (planId, req) => {
+    const allocatedQty = getTotalAllocated(planId, req.productId);
+    
+    // So sánh với số lượng CẦN THÊM (remainingQty) chứ không phải tổng yêu cầu nữa
+    if (allocatedQty <= 0) {
+      toast.warning(`Vui lòng nhập số lượng cho ${req.productName}`);
+      return;
+    }
+    if (allocatedQty < req.remainingQty) {
+      toast.error(`Chưa xuất đủ số lượng yêu cầu (Cần thêm ${req.remainingQty} ${req.unit})`);
+      return; 
+    }
+
+    const transactionsToCreate = [];
+    const prefix = `${planId}-${req.productId}-`;
+    
     Object.keys(allocations).forEach(key => {
-      const parts = key.split('|');
-      // parts[0] là planId, parts[1] là productId
-      if (parts[0] === targetPlanId && parts[1] === targetProductId) {
-        const val = parseFloat(allocations[key]);
-        if (!isNaN(val)) {
-          total += val;
+      if (key.startsWith(prefix)) {
+        const qty = parseFloat(allocations[key]);
+        if (qty > 0) {
+          const [, , batchId] = key.split("-");
+          transactionsToCreate.push({
+            productId: req.productId,
+            batchId: Number(batchId),
+            type: "EXPORT",
+            quantity: qty,
+            note: `Production Plan ${planId}`
+          });
         }
       }
     });
-    return total;
-  };
 
-  const handleConfirm = async (plan) => {
+    const processId = `${planId}-${req.productId}`;
     try {
-      const transactions = [];
+      setSubmittingId(processId);
+      toast.loading(`Đang xuất kho ${req.productName}...`, { id: processId });
 
-      for (const m of plan.materials) {
-        const editKey = `${plan.planId}|${m.productId}`;
-        const required = parseFloat(editedMaterials[editKey]) || m.requiredQty;
-        const total = getAllocatedSum(plan.planId, m.productId);
-
-        // Kiểm tra logic: Nếu tổng cấp phát < nhu cầu thì chặn lại
-        if (total < required) {
-          toast.error(`${m.productName} chưa đủ số lượng! (Cần: ${required}, Đã chọn: ${total})`);
-          return;
-        }
-
-        // Gom các lô hàng có số lượng > 0
-        const prefix = `${plan.planId}|${m.productId}|`;
-        Object.keys(allocations).forEach(key => {
-          if (key.startsWith(prefix)) {
-            const qty = parseFloat(allocations[key]);
-            if (qty > 0) {
-              const parts = key.split('|'); // [planId, productId, batchId]
-              transactions.push({
-                productId: Number(parts[1]), // Đảm bảo là Number
-                batchId: Number(parts[2]),   // Đảm bảo là Number
-                quantity: qty,               // Số thực (0.5)
-                type: "EXPORT",              // Nghiệp vụ xuất kho sản xuất
-                note: `Cấp phát cho Plan #${plan.planId}`
-              });
-            }
-          }
-        });
-      }
-
-      if (transactions.length === 0) {
-        return toast.error("Vui lòng nhập số lượng vào các ô lô hàng!");
-      }
-
-      // Gọi API POST tuần tự
-      const toastId = toast.loading("Đang thực hiện giao dịch kho...");
-      for (const tx of transactions) {
+      for (const tx of transactionsToCreate) {
         await createTransaction(tx);
       }
+
+      toast.success(`Đã xuất kho ${req.productName} thành công!`, { id: processId });
       
-      toast.success(`Xác nhận thành công cho Plan #${plan.planId}`, { id: toastId });
-      
-      // Reset và load lại dữ liệu mới nhất
-      setAllocations({});
-      fetchData(); 
-    } catch (err) {
-      toast.error("Lỗi khi nạp dữ liệu vào API: " + err.message);
+      setAllocations(prev => {
+        const newAlloc = { ...prev };
+        Object.keys(newAlloc).forEach(k => {
+          if (k.startsWith(prefix)) delete newAlloc[k];
+        });
+        return newAlloc;
+      });
+
+      // Fetch lại Data. Nếu nguyên liệu này là cái cuối cùng của Plan, Plan sẽ tự động biến mất!
+      fetchInitialData(); 
+    } catch (error) {
+      toast.error(`Lỗi xuất kho ${req.productName}: ` + error.message, { id: processId });
+    } finally {
+      setSubmittingId(null);
     }
   };
 
-  return (
-    <div className="p-6 space-y-6">
-      {plans.map(plan => (
-        <Card key={plan.planId}>
-          <CardHeader>
-            <CardTitle className="flex justify-between">
-              <span>Plan #{plan.planId}</span>
-              <Badge variant="outline">{plan.status}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {plan.materials.map(mat => {
-              const inventory = inventories.find(i => String(i.productId) === String(mat.productId));
-              const currentTotal = getAllocatedSum(plan.planId, mat.productId);
-              const editKey = `${plan.planId}|${mat.productId}`;
+  if (loading) return <div className="flex h-screen justify-center items-center"><Loader2 className="animate-spin w-10 h-10 text-blue-600" /></div>;
 
-              return (
-                <div key={mat.productId} className="border p-4 rounded-xl bg-slate-50/50">
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="font-bold text-lg text-slate-700">{mat.productName}</span>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        type="number"
-                        step="0.5"
-                        className="w-24 bg-white h-9"
-                        value={editedMaterials[editKey] ?? mat.requiredQty}
-                        onChange={(e) => {
-                          const val = e.target.value === "" ? "" : parseFloat(e.target.value);
-                          setEditedMaterials(prev => ({ ...prev, [editKey]: val }));
-                        }}
-                      />
-                      <span className="text-sm font-medium">/ {mat.requiredQty} {mat.unit}</span>
+  return (
+    <div className="p-6 max-w-6xl mx-auto space-y-8">
+      <header className="flex items-center gap-4 mb-6">
+        <Button variant="outline" size="icon" onClick={() => navigate(-1)}>
+          <ArrowLeft className="w-4 h-4" />
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold">Cấp phát Nguyên liệu Hàng loạt</h1>
+          <p className="text-gray-500 text-sm">Quản lý xuất kho theo từng nguyên liệu của các Kế hoạch</p>
+        </div>
+      </header>
+
+      {plans.length === 0 ? (
+        <Card className="p-10 text-center text-gray-500">
+          <CheckCircle2 className="w-12 h-12 mx-auto text-green-500 mb-3 opacity-50"/>
+          Tất cả Kế hoạch WAITING đều đã được cấp phát đủ nguyên liệu!
+        </Card>
+      ) : (
+        plans.map(plan => (
+          <Card key={plan.planId} className="border-2 shadow-sm border-blue-100 mb-8">
+            <CardHeader className="bg-blue-50/50">
+              <div className="flex justify-between items-center">
+                <CardTitle className="text-xl">Kế hoạch #{plan.planId}</CardTitle>
+                <Badge variant="secondary" className="bg-blue-100 text-blue-800">Đang cấp phát</Badge>
+              </div>
+            </CardHeader>
+
+            <CardContent className="pt-6 space-y-6">
+              {plan.materials.map(req => {
+                // UI 1: NẾU ĐÃ HOÀN THÀNH XUẤT KHO CHO NGUYÊN LIỆU NÀY
+                if (req.isCompleted) {
+                  return (
+                    <div key={req.productId} className="p-4 border border-green-300 bg-green-50/50 rounded-lg shadow-inner flex flex-col md:flex-row justify-between items-center gap-2">
+                      <div className="font-bold text-green-800 flex items-center gap-2">
+                        <CheckCircle2 className="w-5 h-5"/> {req.productName}
+                      </div>
+                      <div className="font-semibold text-green-700 text-sm">
+                        Đã xuất đủ {req.totalRequiredQuantity} {req.unit} (Hoàn thành)
+                      </div>
+                    </div>
+                  );
+                }
+
+                // UI 2: NẾU CHƯA XUẤT HOẶC MỚI XUẤT ĐƯỢC 1 PHẦN
+                const relevantInvs = inventories.filter(inv => 
+                  (inv.product_name || "").toLowerCase() === (req.productName || "").toLowerCase()
+                );
+
+                const totalAllocated = getTotalAllocated(plan.planId, req.productId);
+                const isEnough = totalAllocated >= req.remainingQty;
+                const isSubmittingThis = submittingId === `${plan.planId}-${req.productId}`;
+
+                return (
+                  <div key={req.productId} className="p-4 border rounded-lg bg-white shadow-inner">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
+                      <div className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                         {req.productName}
+                      </div>
+                      <div className="text-sm font-medium bg-blue-50 px-3 py-1.5 rounded text-blue-800 border border-blue-200 flex items-center gap-2">
+                        <span>Cần xuất thêm: <strong className="text-base">{req.remainingQty} {req.unit}</strong></span>
+                        <span className="text-xs text-blue-600/70 ml-1 border-l border-blue-200 pl-2">
+                          (Định mức: {req.totalRequiredQuantity} - Đã xuất: {req.exportedQty})
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {relevantInvs.length > 0 ? (
+                        relevantInvs.map((inv) => {
+                          const actualQty = getInvQuantity(inv);
+                          const expiryDate = getInvExpiryDate(inv);
+                          
+                          return (
+                            <div key={inv.batch?.batchId || inv.inventoryId} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded border border-slate-200">
+                              <span>
+                                Lô <b>{inv.batch?.batchId}</b> (HSD: {expiryDate ? new Date(expiryDate).toLocaleDateString("vi-VN") : "N/A"}) - Tồn kho: <b className="text-base text-gray-700">{actualQty}</b>
+                              </span>
+                              <Input
+                                type="number"
+                                placeholder="0.0"
+                                className="w-24 h-8 bg-white border-gray-300 text-right"
+                                disabled={isSubmittingThis}
+                                value={allocations[`${plan.planId}-${req.productId}-${inv.batch?.batchId}`] ?? ""}
+                                onChange={(e) => handleInputChange(
+                                  plan.planId, req.productId, inv.batch?.batchId, e.target.value, actualQty
+                                )}
+                              />
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="text-rose-500 text-sm flex items-center gap-1 bg-rose-50 p-2 rounded border border-rose-100">
+                          <AlertCircle className="w-4 h-4"/> Hết hàng trong kho (Cần nhập thêm)
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 mt-4 border-t">
+                      <div className={`text-sm font-bold flex items-center gap-2 ${isEnough ? 'text-green-600' : 'text-orange-500'}`}>
+                        {isEnough && <PackageCheck className="w-4 h-4" />}
+                        Đã chọn đợt này: {totalAllocated} / {req.remainingQty} {req.unit}
+                      </div>
+                      
+                      <Button 
+                        onClick={() => handleExportSingleMaterial(plan.planId, req)}
+                        disabled={isSubmittingThis || relevantInvs.length === 0}
+                        className={isEnough ? "bg-green-600 hover:bg-green-700" : "bg-blue-600 hover:bg-blue-700"}
+                      >
+                        {isSubmittingThis ? (
+                           <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Đang xuất...</>
+                        ) : (
+                           <><Send className="w-4 h-4 mr-2" /> Xuất {req.productName}</>
+                        )}
+                      </Button>
                     </div>
                   </div>
-
-                  <div className="space-y-2">
-                    {inventory?.batches.map(batch => {
-                      const batchKey = `${plan.planId}|${mat.productId}|${batch.batchId}`;
-                      return (
-                        <div key={batch.batchId} className="flex justify-between items-center bg-white p-2 rounded border shadow-sm text-sm">
-                          <span>Lô <b>{batch.batchId}</b> (Tồn: {batch.quantity})</span>
-                          <Input
-  type="number"
-  step="0.5"
-  className="w-32 h-8"
-  placeholder="0.0"
-  // Tạo key bằng cách ép kiểu String thủ công cho chắc chắn
-  value={allocations[`${String(plan.planId)}|${String(mat.productId)}|${String(batch.batchId)}`] ?? ""}
-  onChange={(e) => {
-    const val = e.target.value; 
-    const key = `${String(plan.planId)}|${String(mat.productId)}|${String(batch.batchId)}`;
-    
-    setAllocations(prev => ({
-      ...prev,
-      [key]: val 
-    }));
-  }}
-/>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  
-                  <div className={`mt-3 text-right font-bold ${currentTotal >= (editedMaterials[editKey] ?? mat.requiredQty) ? "text-green-600" : "text-red-500"}`}>
-                    Đã chọn: {currentTotal} {mat.unit}
-                  </div>
-                </div>
-              );
-            })}
-            <Button className="w-full h-12 text-lg" onClick={() => handleConfirm(plan)}>Xác nhận Cấp phát</Button>
-          </CardContent>
-        </Card>
-      ))}
+                );
+              })}
+            </CardContent>
+          </Card>
+        ))
+      )}
     </div>
   );
 }
