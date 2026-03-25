@@ -90,7 +90,7 @@ export default function Production() {
       await createProLogBatch(batchesArray);
       toast.success(`Đã tạo ${numBatches} lô sản xuất cho: ${selectedDetail.productName} (Tổng: ${targetQty} SP)`);
 
-      // Tự động chuyển trạng thái các đơn hàng WAITTING có chứa sản phẩm này sang PROCESSING
+      // Tự động chuyển trạng thái các đơn hàng WAITING có chứa sản phẩm này sang PROCESSING
       try {
         const waitingOrders = await getOrdersByStatus('WAITING');
         const ordersToUpdate = waitingOrders.filter(order =>
