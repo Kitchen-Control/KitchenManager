@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getOrdersByStore, fetchOrders, updateOrderStatus, createWasteLog, createAdditionalOrder } from '../../data/api';
+import { getOrdersByStore, fetchOrders, updateOrderStatus, createWasteLog, createAdditionalOrder, getDeliveries } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -55,6 +55,8 @@ export default function OrderHistory() {
   const [damagedItems, setDamagedItems] = useState({}); // { detail_id: damaged_qty }
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const [deliveryStatusMap, setDeliveryStatusMap] = useState({});
+
   const reloadDashboard = useCallback(async () => {
     setLoading(true);
     try {
@@ -68,6 +70,18 @@ export default function OrderHistory() {
         data = all.filter(o => o.store_id === user?.store_id || o.store_id != null);
       }
       setOrders(Array.isArray(data) ? data : []);
+
+      // Also get deliveries to check if Shipper is DONE
+      try {
+        const deliveries = await getDeliveries().catch(() => []);
+        const dMap = {};
+        deliveries.forEach(d => {
+          dMap[d.delivery_id] = d.status;
+        });
+        setDeliveryStatusMap(dMap);
+      } catch (err) {
+        console.warn('Cannot fetch deliveries in Store', err);
+      }
     } catch (e) {
       setOrders([]);
     } finally {
@@ -323,9 +337,10 @@ export default function OrderHistory() {
 
           const isFinalized = (order.comment || '').toUpperCase().includes('FINAL') || localFinalized || order.status === 'DONE';
           
+          const isDeliveryDone = deliveryStatusMap[order.delivery_id] === 'DONE';
           const canCancel = order.status === 'WAITING';
-          const canReportIssue = ['DISPATCHED', 'DELIVERING'].includes(order.status) && !isFinalized;
-          const canFinalize = order.status === 'DELIVERING' && !isFinalized;
+          const canReportIssue = order.status === 'DELIVERING' && isDeliveryDone && !isFinalized;
+          const canFinalize = order.status === 'DELIVERING' && isDeliveryDone && !isFinalized;
 
           const totalPrice = order.totalAmount || order.total_amount || details.reduce((sum, d) => sum + (d.quantity * (d.unitPrice || d.price || d.unit_price || 0)), 0);
 

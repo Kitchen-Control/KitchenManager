@@ -106,16 +106,20 @@ function mapDelivery(d) {
 function mapInventory(inv) {
   if (!inv) return null;
   const batchObj = inv.batch;
+  const productObj = inv.product || batchObj?.product || null;
   const productId = inv.productId ??
-    batchObj?.productId ??
-    batchObj?.product?.productId ??
     inv.product_id ??
+    productObj?.productId ??
+    productObj?.product_id ??
+    batchObj?.productId ??
     null;
 
   return {
     inventory_id: inv.inventoryId,
     product_id: productId,
-    product_name: inv.productName ?? inv.product_name ?? batchObj?.product?.productName ?? batchObj?.productName ?? 'N/A',
+    product_name: inv.productName ?? inv.product_name ?? productObj?.productName ?? productObj?.product_name ?? batchObj?.productName ?? 'N/A',
+    product_type: inv.productType ?? inv.product_type ?? productObj?.productType ?? productObj?.product_type ?? productObj?.type ?? inv.category ?? inv.type ?? batchObj?.productType ?? null,
+    product: productObj, // Keep original product object for flexible access
     batch: batchObj,
     batch_id: batchObj?.batchId ?? inv.batchId,
     quantity: inv.quantity ?? 0,
@@ -420,12 +424,14 @@ export const getOrdersByStatus = async (status) => {
 export const getWaitingOrders = () => getOrdersByStatus('WAITING');
 
 /**
- * GET /orders/{orderId} — Fetch a single order with full details (including orderDetails)
+ * GET /orders (filtered client-side by orderId)
+ * NOTE: The spec does NOT have GET /orders/{id}. We fetch all orders and filter.
  * @param {number|string} orderId
  */
 export const getOrderById = async (orderId) => {
-  const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders/${orderId}`));
-  return data ? mapOrder(data) : null;
+  const data = await handleResponse(await authFetch(`${API_BASE_URL}/orders`));
+  const list = Array.isArray(data) ? data.map(mapOrder) : [];
+  return list.find(o => String(o.order_id) === String(orderId)) ?? null;
 };
 
 /**
@@ -492,10 +498,10 @@ export const updateOrderStatus = async (orderId, status, note = '') => {
   params.append('status', status);
   if (note) params.append('note', note);
 
-  // The spec has note as path variable. To avoid 500/400 errors when note contains special chars
-  // we use an extremely sanitized version for the path, while the full note stays in query params.
-  const pathNote = note ? encodeURIComponent(note.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10) || 'update') : 'none';
-  const response = await authFetch(`${API_BASE_URL}/orders/update-status/${pathNote}?${params.toString()}`, {
+  // The spec path is PATCH /orders/update-status/{note}. We always use "update" as the fixed
+  // path segment to avoid 500s caused by arbitrary Vietnamese/special-char strings.
+  // The actual note value is passed via query param (already appended above).
+  const response = await authFetch(`${API_BASE_URL}/orders/update-status/update?${params.toString()}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}) // Added empty body for some backends that require it
@@ -583,14 +589,14 @@ export const updateReceiptStatus = async (receiptId, status) => {
 export const confirmReceipt = (receiptId) => updateReceiptStatus(receiptId, 'READY');
 
 /**
- * PATCH /receipts/{receiptId}/assign-shipper?shipperId={shipperId}
- * Assigns a shipper to a receipt for delivery.
+ * NOTE: The spec does NOT have a PATCH /receipts/{receiptId}/assign-shipper endpoint.
+ * Shipper assignment is done via POST /deliveries (AssignShipperRequest).
+ * This function is kept as a no-op stub to avoid breaking existing callers.
+ * Use createDelivery() instead to assign a shipper to orders.
  */
-export const assignShipperToReceipt = async (receiptId, shipperId) => {
-  const response = await authFetch(`${API_BASE_URL}/receipts/${receiptId}/assign-shipper?shipperId=${shipperId}`, {
-    method: 'PATCH',
-  });
-  return await handleResponse(response);
+export const assignShipperToReceipt = async (_receiptId, _shipperId) => {
+  console.warn('assignShipperToReceipt: endpoint không tồn tại trong API spec. Dùng createDelivery() thay thế.');
+  return null;
 };
 
 // --- Product API ---
@@ -881,17 +887,13 @@ export const updateLogBatchStatus = async (batchId, status) => {
 };
 
 /**
- * POST /log-batches/{batchId}/expire
- * Marks a batch as expired (DAMAGED), deducts inventory, and auto-creates a WASTE report for Manager.
+ * Mark a batch as DAMAGED.
+ * NOTE: The spec does NOT have POST /log-batches/{batchId}/expire.
+ * Use PATCH /log-batches/{batchId}/status?status=DAMAGED instead.
  * @param {number} batchId
  */
 export const expireBatch = async (batchId) => {
-  const response = await authFetch(`${API_BASE_URL}/log-batches/${batchId}/expire`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  return await handleResponse(response);
+  return await updateLogBatchStatus(batchId, 'DAMAGED');
 };
 
 /**

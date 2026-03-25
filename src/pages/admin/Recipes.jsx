@@ -44,12 +44,15 @@ export default function Recipes() {
 
       <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
         {products.map((product) => {
+          const pId = product.productId || product.product_id;
+          const pName = product.productName || product.product_name;
+          const pType = product.productType || product.product_type || product.type;
+
           // Check if this product has a recipe
-          // Note: Based on Swagger, recipe has productId or product object.
-          const recipe = recipes.find(r => r.productId === product.productId || r.product?.productId === product.productId || r.product_name === product.productName);
+          const recipe = recipes.find(r => r.productId === pId || r.product?.productId === pId || r.product_id === pId || r.product_name === pName || (r.product && r.product.product_id === pId));
 
           return (
-            <Card key={product.productId} className={`transition-all border-l-4 ${recipe ? 'border-l-green-500' : 'border-l-orange-500 hover:shadow-md'}`}>
+            <Card key={pId} className={`transition-all border-l-4 ${recipe ? 'border-l-green-500' : 'border-l-orange-500 hover:shadow-md'}`}>
               <CardHeader className="pb-3">
                 <div className="flex justify-between items-start">
                   <div className="flex gap-3">
@@ -57,9 +60,9 @@ export default function Recipes() {
                       <ChefHat className={`h-6 w-6 ${recipe ? 'text-green-600' : 'text-orange-600'}`} />
                     </div>
                     <div>
-                      <CardTitle className="text-lg">{product.productName}</CardTitle>
+                      <CardTitle className="text-lg">{pName}</CardTitle>
                       <CardDescription className="flex items-center gap-2 mt-1">
-                        Loại: <Badge variant="outline">{product.productType || product.product_type}</Badge>
+                        Loại: <Badge variant="outline">{pType}</Badge>
                       </CardDescription>
                     </div>
                   </div>
