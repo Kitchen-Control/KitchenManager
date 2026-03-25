@@ -368,9 +368,11 @@ export default function OrderHistory() {
                               {formatDate(order.order_date)}
                             </span>
                             <span>{details.length} sản phẩm</span>
-                            <span className="font-semibold text-slate-800 ml-2">
-                              Tổng: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
-                            </span>
+                            {order.total_price != null && (
+                              <span className="font-medium text-emerald-600">
+                                {order.total_price.toLocaleString('vi-VN')}đ
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -467,8 +469,15 @@ export default function OrderHistory() {
                         >
                           <div>
                             <p className="font-medium">{detail.product_name || `SP #${detail.product_id}`}</p>
-                            <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {detail.price ? `${detail.price.toLocaleString('vi-VN')}đ` : '???'} x {detail.quantity}
+                            </p>
                           </div>
+                          {detail.item_total_price != null && (
+                            <span className="font-semibold text-sm">
+                              {detail.item_total_price.toLocaleString('vi-VN')}đ
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
