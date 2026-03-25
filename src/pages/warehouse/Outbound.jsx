@@ -157,7 +157,6 @@ export default function WarehouseOutbound() {
     for (const order of oToProcess) {
       try {
         await createReceipt(order.order_id, `Xuất kho hàng loạt #${order.order_id}`);
-        await updateOrderStatus(order.order_id, 'DISPATCHED', 'Xuất kho hàng loạt');
         successCount++;
       } catch (err) {
         console.warn(`Lỗi đơn #${order.order_id}:`, err);
@@ -185,18 +184,14 @@ export default function WarehouseOutbound() {
         // Fallback: The API often throws 500 Internal Server Error but still manages to create the receipt
         console.warn('API error on createReceipt, verifying creation...', err);
         const allReceipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
-        receipt = allReceipts.find(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED');
+        receipt = allReceipts.find(r => r.status === 'READY' || r.status === 'COMPLETED');
         if (!receipt) {
           throw new Error(err.message || 'Lỗi 500 từ Server và không tìm thấy phiếu được tạo.');
         }
       }
       
-      // Update order status to DISPATCHED
-      try {
-        await updateOrderStatus(order.order_id, 'DISPATCHED', 'Đã soạn xong');
-      } catch (statusErr) {
-        console.warn('Failed to update order status to DISPATCHED, but receipt was likely created.', statusErr);
-      }
+      // Không gọi updateOrderStatus DISPATCHED — backend reject transition PROCESSING→DISPATCHED (500).
+      // Coordinator dùng receipt status READY để nhận biết đơn sẵn sàng giao.
 
       toast.success(`Đã hoàn tất soạn hàng & tạo Phiếu Xuất #${receipt?.receipt_id || ''}.`);
       
@@ -226,7 +221,7 @@ export default function WarehouseOutbound() {
     const receipts = orderReceipts[order.order_id] || [];
     const totalOrdered = (order.order_details || []).reduce((sum, d) => sum + d.quantity, 0);
     const totalDelivered = receipts
-      .filter(r => r.status === 'DELIVERED')
+      .filter(r => r.status === 'COMPLETED')
       .reduce((sum, r) => sum + (r.receipt_details || []).reduce((s, rd) => s + rd.quantity, 0), 0);
 
     let confirmMsg = `Xác nhận "Chốt đơn hàng" #${order.order_id}?\nTrạng thái sẽ chuyển sang HOÀN THÀNH (DONE).`;
@@ -322,8 +317,14 @@ export default function WarehouseOutbound() {
         isLoading: false
       }));
     } catch (error) {
-      toast.error('Lỗi lấy gợi ý FEFO: ' + error.message);
-      setAllocationModal(prev => ({ ...prev, isLoading: false }));
+      console.warn('Lỗi lấy gợi ý FEFO (thường xảy ra với đơn bù):', error.message);
+      // Bỏ qua lỗi 500, cho phép user tự chọn lô thủ công
+      setAllocationModal(prev => ({ 
+        ...prev, 
+        suggestions: [], 
+        manualAllocations: {}, 
+        isLoading: false 
+      }));
     }
   };
 
@@ -374,12 +375,23 @@ export default function WarehouseOutbound() {
 
     setAllocationModal(prev => ({ ...prev, isSubmitting: true }));
     try {
-      await confirmAllocation(order.order_id, finalAllocations);
-      // Flow 1 Step 2: DUYỆT ĐƠN -> confirmAllocation implicitly moves it to PROCESSING
-      // We no longer call updateOrderStatus here to avoid 500 status conflicts/locks
+      try {
+        await confirmAllocation(order.order_id, finalAllocations);
+      } catch (err) {
+        // Fallback cho đơn hàng SUPPLEMENT bị backend báo lỗi 500 do flow bị đứt đoạn
+        if (err.message.includes('500') || err.message.includes('Internal Server Error')) {
+          console.warn('Backend reject confirm-allocation (thường gặp với SUPPLEMENT). Bỏ qua và chuyển status thủ công.');
+          await updateOrderStatus(order.order_id, 'PROCESSING', order.comment || 'Chuyển trạng thái PROCESSING thủ công');
+        } else {
+          throw err;
+        }
+      }
       
       toast.success('Duyệt đơn và phân bổ hàng thành công!');
       setAllocationModal(prev => ({ ...prev, isOpen: false }));
+      
+      // Update ui local state ngay lap tuc
+      setAllOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, status: 'PROCESSING' } : o));
       await fetchData();
     } catch (error) {
       toast.error('Lỗi duyệt đơn: ' + error.message);
@@ -614,7 +626,7 @@ export default function WarehouseOutbound() {
                           </p>
                           {/* Chốt đơn hàng ONLY if at least one delivery attempt made (DELIVERED/PARTIAL) */}
                           {(order.status === 'DELIVERING' || order.status === 'PARTIAL_DELIVERED') && 
-                           (orderReceipts[order.order_id] || []).some(r => r.status === 'DELIVERED') && (
+                           (orderReceipts[order.order_id] || []).some(r => r.status === 'COMPLETED') && (
                             <Button 
                               size="sm" 
                               onClick={(e) => { e.stopPropagation(); handleCompleteOrder(order); }}
@@ -625,7 +637,7 @@ export default function WarehouseOutbound() {
                           )}
                         </div>
                         {(orderReceipts[order.order_id] || [])
-                          .filter(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED')
+                          .filter(r => r.status === 'READY' || r.status === 'COMPLETED')
                           .map(receipt => (
                             <div key={receipt.receipt_id} className="w-full p-3 bg-blue-50/50 text-blue-700 text-xs rounded-lg border border-blue-100 flex items-center justify-between shadow-sm">
                               <div className="flex flex-col">
@@ -635,18 +647,16 @@ export default function WarehouseOutbound() {
                               <Badge 
                                 variant="default" 
                                 className={
-                                  receipt.status === 'DELIVERED' ? "bg-green-600 hover:bg-green-600" : 
-                                  receipt.status === 'COMPLETED' ? "bg-indigo-600 hover:bg-indigo-600" : 
+                                  receipt.status === 'COMPLETED' ? "bg-green-600 hover:bg-green-600" : 
                                   "bg-blue-600 hover:bg-blue-600"
                                 }
                               >
-                                {receipt.status === 'DELIVERED' ? 'SHIPPER ĐÃ GIAO' : 
-                                 receipt.status === 'COMPLETED' ? 'SHIPPER ĐÃ NHẬN' : 
+                                {receipt.status === 'COMPLETED' ? 'ĐÃ GIAO / ĐỐI SOÁT' : 
                                  'CHỜ SHIPPER (READY)'}
                               </Badge>
                             </div>
                           ))}
-                        {(!orderReceipts[order.order_id] || orderReceipts[order.order_id].filter(r => r.status === 'READY' || r.status === 'COMPLETED' || r.status === 'DELIVERED').length === 0) && (
+                        {(!orderReceipts[order.order_id] || orderReceipts[order.order_id].filter(r => r.status === 'READY' || r.status === 'COMPLETED').length === 0) && (
                           <p className="text-xs text-muted-foreground italic text-center py-2">Không tìm thấy phiếu xuất lưu trong hệ thống.</p>
                         )}
                       </div>

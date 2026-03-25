@@ -47,7 +47,10 @@ export default function Inventory() {
     if (filterType === 'ALL') {
       setFilteredInventories(inventories);
     } else {
-      setFilteredInventories(inventories.filter(item => item.product?.productType === filterType || item.product_type === filterType));
+      setFilteredInventories(inventories.filter(item => {
+        const pType = item.product?.type || item.product?.product_type || item.product?.productType || item.product_type || item.type;
+        return pType === filterType;
+      }));
     }
   }, [filterType, inventories]);
 

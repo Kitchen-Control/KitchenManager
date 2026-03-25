@@ -4,7 +4,7 @@ import {
   getDeliveriesByShipperId, 
   updateDeliveryStatus, 
   updateOrderStatus, 
-  getReceiptsByOrderId, 
+  getReceiptsByOrderId,
   updateReceiptStatus,
   createWasteLog,
   getOrderById,
@@ -47,7 +47,7 @@ export default function MyTrips() {
   const [processingId, setProcessingId] = useState(null);
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [selectedDelivery, setSelectedDelivery] = useState(null);
-  const [orderOutcomes, setOrderOutcomes] = useState({}); // { orderId: { status: 'DONE'|'PARTIAL_DELIVERED'|'DAMAGED', details: [] } }
+  const [orderOutcomes, setOrderOutcomes] = useState({}); // { orderId: { damagedProducts: { productId: boolean }, details: [], receipts: [], storeId: number } }
 
   const fetchData = useCallback(async () => {
     if (!user?.user_id) return;
@@ -65,37 +65,30 @@ export default function MyTrips() {
     fetchData();
   }, [fetchData]);
 
-  const updateOrderStatusWithFallback = async (orderId, status, note) => {
-    try {
-      await updateOrderStatus(orderId, status, note);
-    } catch (error) {
-      if (error.message.includes('500')) {
-        const updatedOrder = await getOrderById(orderId).catch(() => null);
-        if (updatedOrder && updatedOrder.status === status) return;
-      }
-      throw error;
-    }
-  };
-
   const handleStartDelivery = async (delivery) => {
-    const orderIds = (delivery.orders || []).map(o => o.order_id);
     setProcessingId(delivery.delivery_id);
     try {
+      const orderIds = (delivery.orders || []).map(o => o.order_id);
+      
+      // Update delivery → DELIVERING. Order vẫn ở DISPATCHED.
       await updateDeliveryStatus(delivery.delivery_id, 'DELIVERING');
-      for (const orderId of orderIds) {
+      
+      // Chuyển tất cả Phiếu xuất (READY) của các đơn trong chuyến sang COMPLETED
+      // -> Đây là trigger để backend TRỪ KHO thực tế.
+      const receiptPromises = orderIds.map(async (orderId) => {
         try {
-          await updateOrderStatusWithFallback(orderId, 'DELIVERING', 'Shipper nhận hàng và bắt đầu giao');
-          // Update associated READY receipts to COMPLETED upon pickup
           const receipts = await getReceiptsByOrderId(orderId).catch(() => []);
           const readyReceipts = receipts.filter(r => r.status === 'READY');
           for (const r of readyReceipts) {
             await updateReceiptStatus(r.receipt_id, 'COMPLETED');
           }
         } catch (e) {
-          console.warn(`Failed to update order #${orderId} or receipts:`, e.message);
+          console.warn(`Failed to update receipts for order #${orderId}:`, e.message);
         }
-      }
-      toast.success('Đã bắt đầu chuyến giao hàng!');
+      });
+      await Promise.all(receiptPromises);
+
+      toast.success('Đã bắt đầu chuyến giao hàng và xác nhận xuất kho!');
       fetchData();
     } catch (error) {
       toast.error('Lỗi: ' + error.message);
@@ -106,42 +99,42 @@ export default function MyTrips() {
 
   const handleOpenCompleteDialog = async (delivery) => {
     setProcessingId(delivery.delivery_id);
-    const initialOutcomes = {};
-    for (const order of delivery.orders || []) {
-      const receipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
-      const exportReceipts = receipts.filter(r => r.type === 'EXPORT' || !r.type);
-      
-      // Robust fallback chain for details: Order > Receipt > API Fetch
-      let detailsToUse = order.order_details || [];
-      
-      // If order details are empty, try to fetch them
-      if (detailsToUse.length === 0) {
-        try {
-          const fetchedDetails = await getOrderDetailsByOrderId(order.order_id);
-          if (fetchedDetails && fetchedDetails.length > 0) {
-            detailsToUse = fetchedDetails;
+
+    // Fetch tất cả orders song song thay vì tuần tự
+    const results = await Promise.all(
+      (delivery.orders || []).map(async (order) => {
+        const receipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
+        const exportReceipts = receipts.filter(r => r.type === 'EXPORT' || !r.type);
+
+        let detailsToUse = order.order_details || [];
+        if (detailsToUse.length === 0) {
+          try {
+            const fetchedDetails = await getOrderDetailsByOrderId(order.order_id);
+            if (fetchedDetails && fetchedDetails.length > 0) detailsToUse = fetchedDetails;
+          } catch (e) {
+            console.error(`Failed to fetch details for order #${order.order_id}:`, e);
           }
-        } catch (e) {
-          console.error(`Failed to fetch specific details for order #${order.order_id}:`, e);
         }
-      }
 
-      // Final fallback to receipt details if still empty
-      const finalDetails = detailsToUse.length > 0 ? detailsToUse : (exportReceipts[0]?.receipt_details || []);
-      
-      const mappedDetails = finalDetails.map(d => ({
-        ...d,
-        actualQuantity: d.quantity
-      }));
+        const finalDetails = detailsToUse.length > 0 ? detailsToUse : (exportReceipts[0]?.receipt_details || []);
+        const initialDamagedProducts = {};
+        finalDetails.forEach(d => { initialDamagedProducts[d.product_id] = false; });
 
-      // CRITICAL: Ensure we have details for supplement creation
-      initialOutcomes[order.order_id] = {
-        status: 'NORMAL',
-        details: finalDetails,
-        receipts: exportReceipts,
-        storeId: order.store?.storeId || order.store_id || order.sender_id
-      };
-    }
+        return {
+          orderId: order.order_id,
+          outcome: {
+            damagedProducts: initialDamagedProducts,
+            details: finalDetails,
+            receipts: exportReceipts,
+            storeId: order.store?.storeId || order.store_id || order.sender_id,
+          }
+        };
+      })
+    );
+
+    const initialOutcomes = {};
+    results.forEach(({ orderId, outcome }) => { initialOutcomes[orderId] = outcome; });
+
     setOrderOutcomes(initialOutcomes);
     setProcessingId(null);
     setSelectedDelivery(delivery);
@@ -152,59 +145,41 @@ export default function MyTrips() {
     if (!selectedDelivery) return;
     setProcessingId(selectedDelivery.delivery_id);
     try {
-      // 1. Process each order and its receipts FIRST
       for (const orderId in orderOutcomes) {
         const outcome = orderOutcomes[orderId];
-        const status = outcome.status;
+        const damagedProductIds = Object.keys(outcome.damagedProducts).filter(id => outcome.damagedProducts[id]);
+        const isAnyDamaged = damagedProductIds.length > 0;
 
-        // ONLY update Order Status if DAMAGED. If NORMAL, Store will mark it DONE later.
-        if (status === 'DAMAGED') {
+        if (isAnyDamaged) {
+          // Chỉ đơn hàng có sản phẩm hỏng mới update status → DAMAGED
           try {
-            await updateOrderStatus(parseInt(orderId), 'DAMAGED', 'Shipper báo hỏng');
+            await updateOrderStatus(parseInt(orderId), 'DAMAGED', 'Shipper báo hỏng sản phẩm');
           } catch (e) {
-            console.warn(`Order #${orderId} update failed:`, e);
+            console.warn(`Order #${orderId} DAMAGED update failed:`, e);
           }
-        }
 
-        // Update all related EXPORT receipts to COMPLETED (meaning Shipper finished moving them)
-        // Wait, if it's delivered normally, receipts should be DELIVERED. 
-        // Flow 1 Step 7: Shipper Hoàn thành chuyến -> receipt = DELIVERED.
-        const receiptFinalStatus = status === 'DAMAGED' ? 'COMPLETED' : 'DELIVERED';
-        for (const r of (outcome.receipts || [])) {
-          try {
-            await updateReceiptStatus(r.receipt_id, receiptFinalStatus);
-          } catch (e) {
-            console.warn(`Receipt #${r.receipt_id} update failed:`, e);
-          }
-        }
-
-        // Handle Waste Log if Damaged
-        if (status === 'DAMAGED') {
-          // 1. Log Waste
-          for (const item of (outcome.details || [])) {
+          // Tạo waste log cho từng sản phẩm hỏng
+          const damagedDetails = outcome.details.filter(d => outcome.damagedProducts[d.product_id]);
+          for (const item of damagedDetails) {
             const receipt = outcome.receipts[0];
             const tx = (receipt?.inventory_transactions || []).find(t => t.product_id === item.product_id);
-            
             await createWasteLog({
               productId: item.product_id,
               batchId: tx?.batch_id || 0,
               orderId: parseInt(orderId),
               quantity: item.quantity,
               wasteType: 'DAMAGED_SHIPPING',
-              note: `Hang hong don #${orderId}`
+              note: `Hang hong SP #${item.product_id} trong don #${orderId}`
             }).catch(e => console.error('Waste log failed:', e));
           }
 
-          // 2. DELAY FOR STABILITY (Ensures parent order update is committed)
-          await new Promise(resolve => setTimeout(resolve, 1200));
-
-          // 3. AUTO CREATE SUPPLEMENT ORDER
+          // Tạo đơn bù SUPPLEMENT cho sản phẩm hỏng
           toast.loading(`Đang tạo đơn bù cho #${orderId}...`, { id: `supp-${orderId}` });
           const newOrder = await createAdditionalOrder(parseInt(orderId), {
             storeId: outcome.storeId,
             type: 'SUPPLEMENT',
-            comment: `SUPPLEMENT - Shipper bao hong #${orderId} - Ho tro giao lai`,
-            orderDetails: (outcome.details || []).map(d => ({
+            comment: `SUPPLEMENT - Shipper bao hong san pham - don #${orderId}`,
+            orderDetails: damagedDetails.map(d => ({
               productId: d.product_id,
               quantity: d.quantity
             }))
@@ -214,34 +189,27 @@ export default function MyTrips() {
             return null;
           });
 
-          // 4. FORCE WAITING STATUS for supplemental order (prevent inheriting DAMAGED)
           if (newOrder && newOrder.order_id) {
-            try {
-              await updateOrderStatus(newOrder.order_id, 'WAITING', 'Cho xu ly (Tu dong)');
-              toast.success(`Đã tạo đơn bù #${newOrder.order_id} thành công!`, { id: `supp-${orderId}` });
-            } catch (e) {
-              console.error('Status update for supplement failed:', e);
-              // Still show success for creation, even if status update (UI visibility) is delayed
-              toast.success(`Đã tạo đơn bù #${newOrder.order_id}`, { id: `supp-${orderId}` });
-            }
+            toast.success(`Đã tạo đơn bù #${newOrder.order_id} thành công!`, { id: `supp-${orderId}` });
           } else {
-             toast.dismiss(`supp-${orderId}`);
+            toast.dismiss(`supp-${orderId}`);
           }
         }
+        // Đơn bình thường (không hỏng): GIỮ NGUYÊN trạng thái DELIVERING.
+        // Store sẽ xác nhận → DONE.
       }
-      
-      // Calculate trip status
-      const allDamaged = Object.values(orderOutcomes).every(o => o.status === 'DAMAGED');
-      const tripStatus = allDamaged && Object.values(orderOutcomes).length > 0 ? 'DAMAGED' : 'DONE'; 
 
-      await updateDeliveryStatus(selectedDelivery.delivery_id, tripStatus).catch(err => {
-        console.warn('Delivery status update failed, ignoring:', err);
+      // Update delivery status → DONE (chuyến đi kết thúc, các đơn hàng bên trong có trạng thái riêng biệt)
+      // Chú ý: Backend KHÔNG CÓ trạng thái DAMAGED cho delivery, chỉ có WAITING | DELIVERING | DONE | CANCEL
+      await updateDeliveryStatus(selectedDelivery.delivery_id, 'DONE').catch(err => {
+        console.warn('Delivery status update failed:', err);
+        throw err; // Ném lỗi để UI hiện thông báo lỗi rõ ràng nếu API thật sự fail
       });
 
-      toast.success('Chuyển hàng đã hoàn thành và đối soát!');
+      toast.success('Chuyến hàng đã hoàn tất! Chờ cửa hàng xác nhận các đơn bình thường.');
     } catch (error) {
       console.error('Finalize trip error:', error);
-      toast.error('Có lỗi xảy ra nhưng chuyến đi đã được xử lý: ' + error.message);
+      toast.error('Có lỗi xảy ra: ' + error.message);
     } finally {
       setShowCompleteDialog(false);
       setProcessingId(null);
@@ -389,7 +357,9 @@ export default function MyTrips() {
 
           <div className="space-y-4 py-4">
             {selectedDelivery?.orders.map(order => {
-              const outcome = orderOutcomes[order.order_id] || { status: 'NORMAL' };
+              const outcome = orderOutcomes[order.order_id] || { damagedProducts: {} };
+              const products = outcome.details || [];
+              
               return (
                 <div key={order.order_id} className="p-4 rounded-xl border bg-slate-50/50 space-y-3">
                   <div className="flex justify-between items-center pb-2 border-b">
@@ -397,30 +367,51 @@ export default function MyTrips() {
                     <Badge variant="outline" className="bg-white">{order.store_name}</Badge>
                   </div>
 
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-medium">Báo cáo sự cố:</span>
-                    <Button 
-                      variant={outcome.status === 'DAMAGED' ? 'destructive' : 'outline'}
-                      size="sm"
-                      onClick={() => setOrderOutcomes(prev => ({
-                        ...prev,
-                        [order.order_id]: { ...prev[order.order_id], status: outcome.status === 'DAMAGED' ? 'NORMAL' : 'DAMAGED' }
-                      }))}
-                      className={outcome.status === 'DAMAGED' ? 'bg-red-600 hover:bg-red-700 font-bold shadow-md' : 'text-slate-600 border-slate-300'}
-                    >
-                      {outcome.status === 'DAMAGED' ? (
-                        <><PackageX className="h-4 w-4 mr-2" /> Đã báo hỏng</>
-                      ) : (
-                        <><PackageX className="h-4 w-4 mr-2 text-red-500" /> Báo hỏng đơn này</>
-                      )}
-                    </Button>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-slate-500 flex items-center gap-1">
+                      <ClipboardList className="h-3 w-3" /> Chi tiết sản phẩm:
+                    </p>
+                    {products.map(product => {
+                      const isDamaged = outcome.damagedProducts[product.product_id];
+                      return (
+                        <div key={product.product_id} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
+                          <span className={isDamaged ? "text-red-600 font-medium" : ""}>
+                            {product.product_name} <span className="text-muted-foreground text-xs">x{product.quantity}</span>
+                          </span>
+                          <Button 
+                            variant={isDamaged ? 'destructive' : 'outline'}
+                            size="sm"
+                            onClick={() => setOrderOutcomes(prev => {
+                              const orderOutcome = prev[order.order_id];
+                              return {
+                                ...prev,
+                                [order.order_id]: {
+                                  ...orderOutcome,
+                                  damagedProducts: {
+                                    ...orderOutcome.damagedProducts,
+                                    [product.product_id]: !isDamaged
+                                  }
+                                }
+                              };
+                            })}
+                            className={`h-7 px-2 text-[10px] ${isDamaged ? 'bg-red-600 hover:bg-red-700 font-bold' : 'text-slate-500 border-slate-200'}`}
+                          >
+                            {isDamaged ? (
+                              <><PackageX className="h-3 w-3 mr-1" /> Hỏng</>
+                            ) : (
+                              <><PackageX className="h-3 w-3 mr-1" /> Báo hỏng</>
+                            )}
+                          </Button>
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  {outcome.status === 'DAMAGED' && (
-                    <div className="p-3 bg-red-50 rounded-lg border border-red-100 flex gap-2 animate-in fade-in zoom-in-95">
-                      <AlertTriangle className="h-5 w-5 text-red-500 shrink-0" />
-                      <p className="text-[11px] text-red-800">
-                        Hệ thống sẽ ghi nhận hàng hỏng vào Waste Log và tự động tạo đơn bù SUPPLEMENT.
+                  {Object.values(outcome.damagedProducts).some(v => v) && (
+                    <div className="p-2 bg-red-50 rounded border border-red-100 flex gap-2">
+                      <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
+                      <p className="text-[10px] text-red-800">
+                        Sản phẩm đánh dấu hỏng sẽ được tạo đơn bù SUPPLEMENT tự động.
                       </p>
                     </div>
                   )}
