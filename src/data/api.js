@@ -106,16 +106,20 @@ function mapDelivery(d) {
 function mapInventory(inv) {
   if (!inv) return null;
   const batchObj = inv.batch;
+  const productObj = inv.product || batchObj?.product || null;
   const productId = inv.productId ??
-    batchObj?.productId ??
-    batchObj?.product?.productId ??
     inv.product_id ??
+    productObj?.productId ??
+    productObj?.product_id ??
+    batchObj?.productId ??
     null;
 
   return {
     inventory_id: inv.inventoryId,
     product_id: productId,
-    product_name: inv.productName ?? inv.product_name ?? batchObj?.product?.productName ?? batchObj?.productName ?? 'N/A',
+    product_name: inv.productName ?? inv.product_name ?? productObj?.productName ?? productObj?.product_name ?? batchObj?.productName ?? 'N/A',
+    product_type: inv.productType ?? inv.product_type ?? productObj?.productType ?? productObj?.product_type ?? productObj?.type ?? inv.category ?? inv.type ?? batchObj?.productType ?? null,
+    product: productObj, // Keep original product object for flexible access
     batch: batchObj,
     batch_id: batchObj?.batchId ?? inv.batchId,
     quantity: inv.quantity ?? 0,
