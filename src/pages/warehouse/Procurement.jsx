@@ -49,10 +49,17 @@ export default function WarehouseProcurement() {
   // API trả về mọi lô hàng, Warehouse Procurement chỉ xem lịch sử lô hàng mua ngoài do Flow quy định (chỉ cho warehouse xem PURCHASE)
   const confirmedBatches = batches.filter(b => b.status === 'DONE' && b.type === 'PURCHASE').sort((a,b) => b.batch_id - a.batch_id);
 
+  // Validation logic
+  const isQuantityInvalid = formData.quantity !== '' && Number(formData.quantity) <= 0;
+
   const handlePurchaseSubmit = async (e) => {
     e.preventDefault();
     if (!formData.productId || !formData.quantity || !formData.expiryDate) {
       toast.error('Vui lòng điền đủ thông tin');
+      return;
+    }
+    if (isQuantityInvalid) {
+      toast.error('Số lượng nhập phải lớn hơn 0');
       return;
     }
     setIsSubmitting(true);
@@ -118,7 +125,16 @@ export default function WarehouseProcurement() {
                 </div>
                 <div className="space-y-2">
                   <Label>Số lượng</Label>
-                  <Input type="number" step="0.1" value={formData.quantity} onChange={e => setFormData({ ...formData, quantity: e.target.value })} />
+                  <Input 
+                    type="number" 
+                    step="0.1" 
+                    value={formData.quantity} 
+                    onChange={e => setFormData({ ...formData, quantity: e.target.value })}
+                    className={isQuantityInvalid ? "border-red-500 focus-visible:ring-red-500" : ""}
+                  />
+                  {isQuantityInvalid && (
+                    <p className="text-sm text-red-500">Số lượng không được nhỏ hơn hoặc bằng 0</p>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
