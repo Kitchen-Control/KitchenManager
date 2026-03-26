@@ -19,6 +19,7 @@ export default function ProductionPlanning() {
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const today = new Date().toISOString().split('T')[0];
 
   const [formData, setFormData] = useState({
     planId: null,
@@ -84,9 +85,20 @@ export default function ProductionPlanning() {
 
   const handleSubmit = async () => {
     if (!formData.startDate || !formData.endDate) {
-      toast.error('Vui lòng chọn ngày bắt đầu và kết thúc');
-      return;
-    }
+    toast.error('Vui lòng chọn ngày bắt đầu và kết thúc');
+    return;
+  }
+
+  // Kiểm tra logic ngày tháng
+  if (formData.startDate < today) {
+    toast.error('Ngày bắt đầu không được nhỏ hơn ngày hôm nay');
+    return;
+  }
+
+  if (formData.endDate < formData.startDate) {
+    toast.error('Ngày kết thúc không được nhỏ hơn ngày bắt đầu');
+    return;
+  }
     if (formData.details.length === 0) {
       toast.error('Vui lòng thêm ít nhất 1 sản phẩm vào kế hoạch');
       return;
@@ -176,15 +188,27 @@ export default function ProductionPlanning() {
             <DialogHeader><DialogTitle className="text-xl font-bold text-orange-600">{formData.planId ? 'Cập nhật Kế hoạch' : 'Tạo Kế hoạch Sản xuất'}</DialogTitle></DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="font-bold">Ngày bắt đầu</Label>
-                  <Input type="date" value={formData.startDate} onChange={e => setFormData({ ...formData, startDate: e.target.value })} className="focus:ring-orange-500" />
-                </div>
-                <div className="space-y-2">
-                  <Label className="font-bold">Ngày kết thúc</Label>
-                  <Input type="date" value={formData.endDate} onChange={e => setFormData({ ...formData, endDate: e.target.value })} className="focus:ring-orange-500" />
-                </div>
-              </div>
+  <div className="space-y-2">
+    <Label className="font-bold">Ngày bắt đầu</Label>
+    <Input 
+      type="date" 
+      min={today} // Không cho phép chọn trước ngày hôm nay
+      value={formData.startDate} 
+      onChange={e => setFormData({ ...formData, startDate: e.target.value })} 
+      className="focus:ring-orange-500" 
+    />
+  </div>
+  <div className="space-y-2">
+    <Label className="font-bold">Ngày kết thúc</Label>
+    <Input 
+      type="date" 
+      min={formData.startDate || today} // Không cho phép chọn trước ngày bắt đầu
+      value={formData.endDate} 
+      onChange={e => setFormData({ ...formData, endDate: e.target.value })} 
+      className="focus:ring-orange-500" 
+    />
+  </div>
+</div>
               <div className="space-y-2">
                 <Label className="font-bold">Ghi chú</Label>
                 <Input placeholder="Ghi chú tổng quát cho kế hoạch này..." value={formData.note} onChange={e => setFormData({ ...formData, note: e.target.value })} />

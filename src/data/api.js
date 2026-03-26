@@ -49,6 +49,7 @@ function mapProduct(p) {
     product_name: p.productName,
     product_type: p.productType,
     unit: p.unit,
+    price: p.price,
     shelf_life_days: p.shelfLifeDays,
     available_stock: p.availableStock ?? 0,
     image: p.img || '📦',
