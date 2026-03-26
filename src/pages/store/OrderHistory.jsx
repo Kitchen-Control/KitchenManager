@@ -116,8 +116,11 @@ export default function OrderHistory() {
 
       if (deliveryOrders.length === 0) return;
 
+      // Terminal: DONE/CANCELED, or Store has already processed (STORE_ comment)
       const allFinished = deliveryOrders.every(o =>
-        ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(o.status)
+        o.status === 'DONE' ||
+        o.status === 'CANCELED' ||
+        String(o.comment || '').toUpperCase().includes('STORE_')
       );
 
       if (allFinished) {
@@ -176,7 +179,7 @@ export default function OrderHistory() {
         return;
       }
 
-      // Update order status to DAMAGED (simple note, no special chars)
+      // Update order status to DAMAGED (store confirmed)
       await updateOrderStatus(targetOrder.order_id, 'DAMAGED', 'STORE_DAMAGED');
 
       // Create Waste Logs
@@ -339,14 +342,16 @@ export default function OrderHistory() {
           const details = order.order_details || [];
           const isOpen = openOrders.includes(order.order_id);
 
-          const isFinalized = ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(order.status) ||
-                              (order.comment || '').toUpperCase().includes('STORE_DONE') ||
-                              (order.comment || '').toUpperCase().includes('STORE_DAMAGED') ||
-                              (order.comment || '').toUpperCase().includes('STORE_PARTIAL');
+          // isFinalized: store has already taken action (comment starts with STORE_) or order cancelled
+          const isFinalized = order.status === 'CANCELED' ||
+                              (order.comment || '').toUpperCase().includes('STORE_');
 
-          // Buttons only visible AFTER shipper explicitly confirms this specific order
-          const isShipperDone = order.status === 'DELIVERING' &&
-                                localStorage.getItem(`shipper_confirmed_${order.order_id}`) === 'true';
+          // isShipperDone: shipper confirmed this order (set via API to DELIVERED/PARTIAL_DELIVERED/DAMAGED)
+          // Also accept localStorage signal for immediate UI feedback before page reload
+          const isShipperDone = !isFinalized && (
+            ['DELIVERED', 'PARTIAL_DELIVERED', 'DAMAGED'].includes(order.status) ||
+            localStorage.getItem(`shipper_confirmed_${order.order_id}`) === 'true'
+          );
           const canCancel = order.status === 'WAITING';
           const canFinalizeFlow = isShipperDone && !isFinalized;
 
