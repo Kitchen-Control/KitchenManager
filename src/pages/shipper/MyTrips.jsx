@@ -3,6 +3,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { 
   getDeliveriesByShipperId, 
   updateDeliveryStatus, 
+  updateOrderStatus,
   getReceiptsByOrderId,
   updateReceiptStatus,
   createAdditionalOrder
@@ -142,8 +143,16 @@ export default function MyTrips() {
         return next;
       });
 
+      // --- Determine new order status based on damage ---
+      const totalDetailCount = (orderObj?.order_details || []).length;
+      const damagedCount = damagedEntries.length;
+      let newOrderStatus = 'DELIVERED'; // default: all good
+      if (damagedCount > 0) {
+        newOrderStatus = damagedCount >= totalDetailCount ? 'DAMAGED' : 'PARTIAL_DELIVERED';
+      }
+
+      // --- Create SUPPLEMENT for damaged items if any ---
       if (damagedEntries.length > 0) {
-        // Create SUPPLEMENT order immediately when shipper reports damage
         try {
           const supplementDetails = damagedEntries.map(([did]) => {
             const detail = orderObj?.order_details?.find(d => String(d.order_detail_id) === String(did));
@@ -165,8 +174,10 @@ export default function MyTrips() {
         }
       }
 
-      // Mark as confirmed locally (orders are already DELIVERING from trip start)
-      // Store this in localStorage so the Store side can detect shipper confirmed
+      // --- Call API: DELIVERING → DELIVERED / PARTIAL_DELIVERED / DAMAGED ---
+      await updateOrderStatus(parseInt(orderId), newOrderStatus, 'SHIPPER_DONE');
+
+      // Write localStorage so Store UI updates immediately (before next reload)
       localStorage.setItem(`shipper_confirmed_${orderId}`, 'true');
       markAsDelivered(deliveryId, orderId);
       toast.success(`Đã xác nhận giao đơn #${orderId}. Chờ Store đối soát.`);
