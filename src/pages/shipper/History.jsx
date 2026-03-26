@@ -138,10 +138,11 @@ export default function ShipperHistory() {
                         </div>
                         <Badge variant="outline" className={
                           order.status === 'DONE' ? 'border-green-200 text-green-700 bg-green-50' : 
+                          order.status === 'DAMAGED' ? 'border-red-200 text-red-700 bg-red-50 font-bold' :
                           order.status === 'PARTIAL_DELIVERED' ? 'border-orange-200 text-orange-700 bg-orange-50' : 
-                          'border-red-200 text-red-700 bg-red-50'
+                          'border-slate-200 text-slate-700 bg-slate-50'
                         }>
-                          {order.status}
+                          {order.status === 'DONE' ? 'HOÀN TẤT' : order.status === 'DAMAGED' ? 'HÀNG HỎNG' : order.status}
                         </Badge>
                       </div>
                     ))}
