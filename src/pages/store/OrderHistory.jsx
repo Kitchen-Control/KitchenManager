@@ -403,9 +403,11 @@ export default function OrderHistory() {
                               {formatDate(order.order_date)}
                             </span>
                             <span>{details.length} sản phẩm</span>
-                            <span className="font-semibold text-slate-800 ml-2">
-                              Tổng: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
-                            </span>
+                            {order.total_price != null && (
+                              <span className="font-medium text-emerald-600">
+                                {order.total_price.toLocaleString('vi-VN')}đ
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

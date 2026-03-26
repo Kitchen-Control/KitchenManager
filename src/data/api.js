@@ -831,6 +831,13 @@ export const getInventoryById = async (inventoryId) => {
   const data = await handleResponse(response);
   return data ? mapInventory(data) : data;
 };
+export const getRawMaterialInventories = async () => {
+  const data = await handleResponse(
+    await authFetch(`${API_BASE_URL}/inventories/type/RAW_MATERIAL`)
+  );
+  return Array.isArray(data) ? data.map(mapInventory) : data;
+};
+
 
 // --- Log Batches API ---
 
@@ -981,7 +988,12 @@ export const getProductionPlanDetails = async (planId) => {
   const data = await handleResponse(await authFetch(`${API_BASE_URL}/production-plan-details/plan/${planId}`));
   return Array.isArray(data) ? data : [];
 };
-
+export const getMaterialRequirements = async (planId) => {
+  const response = await authFetch(
+    `${API_BASE_URL}/production-plans/${planId}/material-requirements`
+  );
+  return await handleResponse(response);
+};
 // --- Quality Feedback API ---
 
 /** GET /feedbacks */
