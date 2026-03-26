@@ -15,6 +15,7 @@ import {
   AlertCircle,
   RefreshCw,
   CheckCircle2,
+  Minus,
 } from 'lucide-react';
 import {
   Collapsible,
@@ -55,33 +56,17 @@ export default function OrderHistory() {
   const [damagedItems, setDamagedItems] = useState({}); // { detail_id: damaged_qty }
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [deliveryStatusMap, setDeliveryStatusMap] = useState({});
-
   const reloadDashboard = useCallback(async () => {
     setLoading(true);
     try {
       let data = [];
       if (user?.store_id) {
-        // Primary: fetch orders for this specific store
         data = await getOrdersByStore(user.store_id).catch(() => []);
       } else {
-        // Fallback: fetch all orders and filter by store_id from user context
         const all = await fetchOrders().catch(() => []);
         data = all.filter(o => o.store_id === user?.store_id || o.store_id != null);
       }
       setOrders(Array.isArray(data) ? data : []);
-
-      // Also get deliveries to check if Shipper is DONE
-      try {
-        const deliveries = await getDeliveries().catch(() => []);
-        const dMap = {};
-        deliveries.forEach(d => {
-          dMap[d.delivery_id] = d.status;
-        });
-        setDeliveryStatusMap(dMap);
-      } catch (err) {
-        console.warn('Cannot fetch deliveries in Store', err);
-      }
     } catch (e) {
       setOrders([]);
     } finally {
@@ -93,16 +78,13 @@ export default function OrderHistory() {
     reloadDashboard();
   }, [reloadDashboard]);
 
-  // Refresh when user switches back to this tab/window (e.g., after placing an order)
   useEffect(() => {
     const handleFocus = () => reloadDashboard();
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [reloadDashboard]);
 
-  const storeOrders = [...orders].sort(
-    (a, b) => b.order_id - a.order_id
-  );
+  const storeOrders = [...orders].sort((a, b) => b.order_id - a.order_id);
 
   const toggleOrder = (orderId) => {
     setOpenOrders((prev) =>
@@ -113,7 +95,7 @@ export default function OrderHistory() {
   const handleCancelOrder = async () => {
     if (!cancelOrder) return;
     try {
-      await updateOrderStatus(cancelOrder.order_id, 'CANCELED', cancelOrder.store_id);
+      await updateOrderStatus(cancelOrder.order_id, 'CANCELED', 'STORE_CANCEL');
       toast.success('Đơn hàng đã được hủy thành công');
       reloadDashboard();
     } catch (e) {
@@ -125,18 +107,26 @@ export default function OrderHistory() {
   const checkAndCompleteDelivery = async (deliveryId) => {
     if (!deliveryId) return;
     try {
-      // 1. Fetch all orders (we need to see their latest statuses)
       const allOrders = await fetchOrders();
-      const deliveryOrders = allOrders.filter(o => o.delivery_id === deliveryId);
-      
+      // Only consider non-supplement orders in this delivery
+      const deliveryOrders = allOrders.filter(o =>
+        o.delivery_id === deliveryId &&
+        !String(o.comment || '').toUpperCase().includes('SUPPLEMENT')
+      );
+
       if (deliveryOrders.length === 0) return;
 
-      // 2. Check if all orders are in a terminal state: DONE or DAMAGED
-      const allFinished = deliveryOrders.every(o => o.status === 'DONE' || o.status === 'DAMAGED');
-      
+      const allFinished = deliveryOrders.every(o =>
+        ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(o.status)
+      );
+
       if (allFinished) {
-        // 3. Update Delivery status to DONE
         await updateDeliveryStatus(deliveryId, 'DONE');
+        // Clear shipper_confirmed keys for these orders
+        deliveryOrders.forEach(o => {
+          localStorage.removeItem(`shipper_confirmed_${o.order_id}`);
+        });
+        toast.success('Chuyến giao hàng đã hoàn tất!');
       }
     } catch (e) {
       console.warn('Auto-complete delivery failed:', e);
@@ -145,24 +135,15 @@ export default function OrderHistory() {
 
   const handleFinalizeOrder = async (order) => {
     setIsSubmitting(true);
-    const currentComment = order.comment || '';
-    const newComment = currentComment ? `${currentComment} FINAL` : 'FINAL';
-    
-    // UI Hiding first (Optimistic)
-    setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, comment: newComment, status: 'DONE' } : o));
-    
+    setOrders(prev => prev.map(o =>
+      o.order_id === order.order_id ? { ...o, status: 'DONE' } : o
+    ));
     try {
-      await updateOrderStatus(order.order_id, 'DONE', newComment);
-      toast.success(`Đơn hàng #${order.order_id} đã được đối soát hoàn tất.`);
-      
-      // Auto-check for delivery completion
-      if (order.delivery_id) {
-        await checkAndCompleteDelivery(order.delivery_id);
-      }
-
+      await updateOrderStatus(order.order_id, 'DONE', 'STORE_DONE');
+      toast.success(`Đơn hàng #${order.order_id} đã hoàn tất.`);
+      if (order.delivery_id) await checkAndCompleteDelivery(order.delivery_id);
       reloadDashboard();
     } catch (e) {
-      console.warn('Finalize API failed:', e);
       toast.error('Lỗi khi hoàn tất: ' + e.message);
     } finally {
       setIsSubmitting(false);
@@ -170,60 +151,60 @@ export default function OrderHistory() {
   };
 
   const handleReportDamaged = async () => {
-    if (!damagedOrder) return;
-    const damagedEntries = Object.entries(damagedItems).filter(([_, qty]) => qty > 0);
-    if (damagedEntries.length === 0) {
+    const targetOrder = damagedOrder;
+    if (!targetOrder) return;
+
+    const manualEntries = Object.entries(damagedItems).filter(([_, qty]) => Number(qty) > 0);
+    if (manualEntries.length === 0) {
       toast.error('Vui lòng nhập số lượng hỏng cho ít nhất 1 sản phẩm');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const noteParts = damagedEntries.map(([id, qty]) => {
-        const detail = damagedOrder.order_details.find(d => String(d.order_detail_id) === id || String(d.product_id) === id);
-        return `${detail?.product_name || id} hỏng ${qty}`;
-      });
-      
-      const damagedIdsTag = ` [DAMAGED_IDS: ${damagedProductIds.join(',')}]`;
-      
-      // 1. Update status and Log Waste
-      // Step 808: Store-side damage/missing items also set status to DONE
-      await updateOrderStatus(damagedOrder.order_id, 'DONE', `Cửa hàng báo hỏng: ${noteParts.join(', ')}${damagedIdsTag} FINAL`);
-      
-      await Promise.all(damagedEntries.map(([id, qty]) => {
-        const detail = damagedOrder.order_details.find(d => String(d.order_detail_id) === id || String(d.product_id) === id);
-        return createWasteLog({
-          productId: detail.product_id,
-          orderId: damagedOrder.order_id,
-          quantity: qty,
-          wasteType: 'DAMAGED_UPON_RECEIPT',
-          note: `Hỏng từ đơn #${damagedOrder.order_id}`
-        }).catch(err => console.error('Waste log failed:', err));
-      }));
+      const entriesToProcess = manualEntries.map(([id, qty]) => {
+        const detail = (targetOrder.order_details || []).find(
+          d => String(d.order_detail_id) === String(id)
+        );
+        if (!detail) return null;
+        return { productId: detail.product_id, quantity: Number(qty), name: detail.product_name };
+      }).filter(Boolean);
 
-      // 2. AUTO CREATE SUPPLEMENT ORDER
-      const supplementDetails = damagedEntries.map(([id, qty]) => {
-        const detail = damagedOrder.order_details.find(d => String(d.order_detail_id) === id || String(d.product_id) === id);
-        return {
-          productId: detail.product_id,
-          quantity: qty
-        };
-      });
-
-      await createAdditionalOrder(damagedOrder.order_id, {
-        storeId: damagedOrder.store_id || user.store_id,
-        type: 'SUPPLEMENT',
-        comment: `SUPPLEMENT - [Báo hỏng] Đơn #${damagedOrder.order_id}`,
-        orderDetails: supplementDetails
-      }).catch(e => console.error('Auto-supplement failed:', e));
-
-      toast.success('Đã báo cáo hàng hỏng và tự động tạo đơn bù SUPPLEMENT.');
-      
-      // Auto-check for delivery completion
-      if (damagedOrder.delivery_id) {
-        await checkAndCompleteDelivery(damagedOrder.delivery_id);
+      if (entriesToProcess.length === 0) {
+        toast.error('Không tìm thấy chi tiết sản phẩm hỏng');
+        setIsSubmitting(false);
+        return;
       }
 
+      // Update order status to DAMAGED (simple note, no special chars)
+      await updateOrderStatus(targetOrder.order_id, 'DAMAGED', 'STORE_DAMAGED');
+
+      // Create Waste Logs
+      await Promise.all(entriesToProcess.map(e =>
+        createWasteLog({
+          productId: e.productId,
+          orderId: targetOrder.order_id,
+          quantity: e.quantity,
+          wasteType: 'DAMAGED_UPON_RECEIPT',
+          note: `Hang hong don ${targetOrder.order_id}`
+        }).catch(err => console.error('Waste log failed:', err))
+      ));
+
+      // Create Supplement Order
+      const supplementDetails = entriesToProcess.map(e => ({
+        productId: e.productId,
+        quantity: e.quantity
+      }));
+
+      await createAdditionalOrder(targetOrder.order_id, {
+        storeId: targetOrder.store_id || user.store_id,
+        type: 'SUPPLEMENT',
+        comment: 'SUPPLEMENT_STORE_DAMAGED',
+        orderDetails: supplementDetails
+      });
+
+      toast.success('Đã báo hỏng và tạo đơn bù SUPPLEMENT.');
+      if (targetOrder.delivery_id) await checkAndCompleteDelivery(targetOrder.delivery_id);
       reloadDashboard();
       setDamagedOrder(null);
       setDamagedItems({});
@@ -236,53 +217,48 @@ export default function OrderHistory() {
 
   const handleReportPartial = async () => {
     if (!partialOrder) return;
-    
-    const missingEntries = Object.entries(missingItems).filter(([_, qty]) => qty > 0);
+
+    const missingEntries = Object.entries(missingItems).filter(([_, qty]) => Number(qty) > 0);
     if (missingEntries.length === 0) {
       toast.error('Vui lòng nhập số lượng thiếu cho ít nhất 1 sản phẩm');
       return;
     }
 
-    const missingProductIds = missingEntries.map(([id, _]) => {
-      const detail = partialOrder.order_details.find(d => String(d.order_detail_id) === id);
-      return detail?.product_id;
-    }).filter(Boolean);
-    const missingIdsTag = ` [MISSING_IDS: ${missingProductIds.join(',')}]`;
-
     setIsSubmitting(true);
     try {
-      // Flow 1 Step 6 Risk 1: Update status to DONE
-      // Rule: Create supplement order.
-      const note = missingEntries.map(([id, qty]) => {
-        const detail = partialOrder.order_details.find(d => String(d.order_detail_id) === id);
-        return `${detail.product_name} thiếu ${qty}`;
-      }).join(', ');
+      const entriesToProcess = missingEntries.map(([id, qty]) => {
+        const detail = (partialOrder.order_details || []).find(
+          d => String(d.order_detail_id) === String(id)
+        );
+        if (!detail) return null;
+        return { productId: detail.product_id, quantity: Number(qty), name: detail.product_name };
+      }).filter(Boolean);
 
-      await updateOrderStatus(partialOrder.order_id, 'DONE', `Giao thiếu: ${note}${missingIdsTag} FINAL`);
-      
-      // 2. AUTO CREATE SUPPLEMENT ORDER
-      const supplementDetails = missingEntries.map(([id, qty]) => {
-        const detail = partialOrder.order_details.find(d => String(d.order_detail_id) === id);
-        return {
-          productId: detail.product_id,
-          quantity: qty
-        };
-      });
+      if (entriesToProcess.length === 0) {
+        toast.error('Không tìm thấy chi tiết sản phẩm thiếu');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Update to PARTIAL_DELIVERED (order is partially received - missing items)
+      await updateOrderStatus(partialOrder.order_id, 'PARTIAL_DELIVERED', 'STORE_PARTIAL');
+
+      // Create Supplement Order for missing items
+      const supplementDetails = entriesToProcess.map(e => ({
+        productId: e.productId,
+        quantity: e.quantity
+      }));
 
       await createAdditionalOrder(partialOrder.order_id, {
         storeId: partialOrder.store_id || user.store_id,
         type: 'SUPPLEMENT',
-        comment: `SUPPLEMENT - [Báo thiếu] Đơn #${partialOrder.order_id}`,
+        comment: 'SUPPLEMENT_STORE_MISSING',
         orderDetails: supplementDetails
       }).catch(e => console.error('Auto-supplement failed:', e));
 
-      toast.success('Đã báo thiếu hàng và tự động tạo đơn bù SUPPLEMENT.');
-      
-      // Auto-check for delivery completion
-      if (partialOrder.delivery_id) {
-        await checkAndCompleteDelivery(partialOrder.delivery_id);
-      }
+      toast.success('Đã báo thiếu hàng và tạo đơn bù SUPPLEMENT.');
 
+      if (partialOrder.delivery_id) await checkAndCompleteDelivery(partialOrder.delivery_id);
       reloadDashboard();
       setPartialOrder(null);
       setMissingItems({});
@@ -306,9 +282,8 @@ export default function OrderHistory() {
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
-    // Bù +7 tiếng nếu Server đang lưu giờ UTC
     if (!dateString.includes('+07:00') && !dateString.includes('Z')) {
-       date.setHours(date.getHours() + 7);
+      date.setHours(date.getHours() + 7);
     }
     return date.toLocaleDateString('vi-VN', {
       day: '2-digit',
@@ -363,21 +338,20 @@ export default function OrderHistory() {
         {storeOrders.map((order) => {
           const details = order.order_details || [];
           const isOpen = openOrders.includes(order.order_id);
-          
-          let localFinalized = false;
-          try {
-            const finalizedList = JSON.parse(localStorage.getItem('finalized_orders') || '[]');
-            localFinalized = Array.isArray(finalizedList) && finalizedList.map(Number).includes(Number(order.order_id));
-          } catch (e) {}
 
-          const isFinalized = (order.comment || '').toUpperCase().includes('FINAL') || localFinalized || order.status === 'DONE';
-          
-          const isDeliveryDone = deliveryStatusMap[order.delivery_id] === 'DONE';
+          const isFinalized = ['DONE', 'DAMAGED', 'CANCELED', 'PARTIAL_DELIVERED'].includes(order.status) ||
+                              (order.comment || '').toUpperCase().includes('STORE_DONE') ||
+                              (order.comment || '').toUpperCase().includes('STORE_DAMAGED') ||
+                              (order.comment || '').toUpperCase().includes('STORE_PARTIAL');
+
+          // Buttons only visible AFTER shipper explicitly confirms this specific order
+          const isShipperDone = order.status === 'DELIVERING' &&
+                                localStorage.getItem(`shipper_confirmed_${order.order_id}`) === 'true';
           const canCancel = order.status === 'WAITING';
-          const canReportIssue = order.status === 'DELIVERING' && isDeliveryDone && !isFinalized;
-          const canFinalize = order.status === 'DELIVERING' && isDeliveryDone && !isFinalized;
+          const canFinalizeFlow = isShipperDone && !isFinalized;
 
-          const totalPrice = order.totalAmount || order.total_amount || details.reduce((sum, d) => sum + (d.quantity * (d.unitPrice || d.price || d.unit_price || 0)), 0);
+          const totalPrice = details.reduce((sum, d) => sum + (d.quantity * (d.unitPrice || d.price || d.unit_price || 0)), 0);
+          const isSupplement = String(order.comment || '').toUpperCase().includes('SUPPLEMENT');
 
           return (
             <Card key={order.order_id} className="overflow-hidden">
@@ -393,8 +367,8 @@ export default function OrderHistory() {
                           <CardTitle className="text-base flex items-center gap-2">
                             Đơn hàng #{order.order_id}
                             <StatusBadge status={order.status} type="order" />
-                            {String(order.comment || '').toUpperCase().includes('SUPPLEMENT') && (
-                              <Badge variant="destructive" className="animate-pulse shadow-sm">SUPPLEMENT (HÀNG BÙ)</Badge>
+                            {isSupplement && (
+                              <Badge variant="destructive" className="animate-pulse shadow-sm">HÀNG BÙ</Badge>
                             )}
                           </CardTitle>
                           <div className="flex items-center gap-3 text-sm text-muted-foreground mt-1">
@@ -403,9 +377,11 @@ export default function OrderHistory() {
                               {formatDate(order.order_date)}
                             </span>
                             <span>{details.length} sản phẩm</span>
-                            <span className="font-semibold text-slate-800 ml-2">
-                              Tổng: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
-                            </span>
+                            {totalPrice > 0 && (
+                              <span className="font-semibold text-slate-800 ml-2">
+                                Tổng: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPrice)}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -424,20 +400,9 @@ export default function OrderHistory() {
                             Hủy
                           </Button>
                         )}
-                        {canReportIssue && (
+                        {canFinalizeFlow && (
                           <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-orange-600 border-orange-200 hover:bg-orange-50"
-                              onClick={() => {
-                                setPartialOrder(order);
-                                setMissingItems({});
-                              }}
-                            >
-                              <AlertCircle className="h-4 w-4 mr-1" />
-                              Báo thiếu
-                            </Button>
+                            {/* Báo hỏng - opens dialog with quantity input */}
                             <Button
                               variant="outline"
                               size="sm"
@@ -446,25 +411,36 @@ export default function OrderHistory() {
                                 setDamagedOrder(order);
                                 setDamagedItems({});
                               }}
+                              disabled={isSubmitting}
                             >
                               <AlertCircle className="h-4 w-4 mr-1" />
                               Báo hỏng
                             </Button>
+                            {/* Báo thiếu - opens dialog with quantity input */}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-orange-600 border-orange-200 hover:bg-orange-50"
+                              onClick={() => {
+                                setPartialOrder(order);
+                                setMissingItems({});
+                              }}
+                              disabled={isSubmitting}
+                            >
+                              <Minus className="h-4 w-4 mr-1" />
+                              Báo thiếu
+                            </Button>
+                            {/* Hoàn tất */}
+                            <Button
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700"
+                              onClick={() => handleFinalizeOrder(order)}
+                              disabled={isSubmitting}
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-1" />
+                              Hoàn tất
+                            </Button>
                           </div>
-                        )}
-                        {canFinalize && (
-                          <Button
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleFinalizeOrder(order);
-                            }}
-                            disabled={isSubmitting}
-                          >
-                            <CheckCircle2 className="h-4 w-4 mr-1" />
-                            Hoàn tất
-                          </Button>
                         )}
                         {isOpen ? (
                           <ChevronUp className="h-5 w-5 text-muted-foreground" />
@@ -477,49 +453,25 @@ export default function OrderHistory() {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <CardContent className="border-t pt-4">
-                        <div className="space-y-3">
-                        {order.comment?.toUpperCase().includes('FINAL') && (
-                          <div className="p-3 bg-green-50 border border-green-100 rounded-lg mb-2">
-                             <p className="text-xs font-bold text-green-700 flex items-center gap-1">
-                               <CheckCircle2 className="h-3 w-3" /> ĐƠN HÀNG ĐÃ ĐỐI SOÁT HOÀN TẤT
-                             </p>
+                    <div className="space-y-3">
+                      {details.map((detail) => (
+                        <div
+                          key={detail.order_detail_id || detail.product_id}
+                          className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                        >
+                          <div>
+                            <p className="font-medium">{detail.product_name || `SP #${detail.product_id}`}</p>
+                            <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
                           </div>
-                        )}
-                        {order.comment?.includes('[REJECTED]') && (
-                          <div className="p-3 bg-red-50 border border-red-100 rounded-lg mb-2">
-                             <p className="text-xs font-bold text-red-700 flex items-center gap-1">
-                               <X className="h-3 w-3" /> ĐƠN HÀNG BỊ TỪ CHỐI BỞI KHO:
-                             </p>
-                             <p className="text-sm text-red-600 mt-1 italic">
-                               {order.comment.replace('[REJECTED]', '').trim()}
-                             </p>
-                          </div>
-                        )}
-                        {details.map((detail) => {
-                          const comment = order.comment || '';
-                          const isDamaged = comment.includes('[DAMAGED_IDS:') && 
-                                            comment.split('[DAMAGED_IDS:')[1].split(']')[0].split(',').includes(String(detail.product_id));
-                          const isMissing = comment.includes('[MISSING_IDS:') && 
-                                            comment.split('[MISSING_IDS:')[1].split(']')[0].split(',').includes(String(detail.product_id));
-
-                          return (
-                            <div
-                              key={detail.order_detail_id || detail.product_id}
-                              className={`flex items-center justify-between p-3 rounded-lg ${isDamaged ? 'bg-red-50 border border-red-100' : isMissing ? 'bg-orange-50 border border-orange-100' : 'bg-muted/50'}`}
-                            >
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <p className={`font-medium ${isDamaged ? 'text-red-700' : isMissing ? 'text-orange-700' : ''}`}>
-                                    {detail.product_name || `SP #${detail.product_id}`}
-                                  </p>
-                                  {isDamaged && <Badge variant="destructive" className="h-5 text-[10px] px-1 bg-red-600">HỎNG</Badge>}
-                                  {isMissing && <Badge variant="secondary" className="h-5 text-[10px] px-1 bg-orange-500 text-white hover:bg-orange-600">THIẾU</Badge>}
-                                </div>
-                                <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
-                              </div>
-                            </div>
-                          );
-                        })}
+                          {detail.price > 0 && (
+                            <p className="text-sm font-semibold">
+                              {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(
+                                detail.price * detail.quantity
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   </CardContent>
                 </CollapsibleContent>
@@ -529,6 +481,7 @@ export default function OrderHistory() {
         })}
       </div>
 
+      {/* Cancel order dialog */}
       <AlertDialog open={!!cancelOrder} onOpenChange={() => setCancelOrder(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -549,51 +502,31 @@ export default function OrderHistory() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Báo hỏng dialog - with quantity input */}
       <Dialog open={!!damagedOrder} onOpenChange={(open) => !open && setDamagedOrder(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Báo hỏng hàng - Đơn #{damagedOrder?.order_id}</DialogTitle>
+            <DialogTitle>Báo hỏng - Đơn #{damagedOrder?.order_id}</DialogTitle>
             <DialogDescription>
-              Nhập số lượng sản phẩm bị hỏng. Hệ thống sẽ ghi nhận Waste Log và tạo đơn bù SUPPLEMENT.
+              Nhập số lượng hỏng cho từng sản phẩm. Hệ thống sẽ tạo đơn bù SUPPLEMENT.
             </DialogDescription>
-            <div className="flex gap-2 mt-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="text-[10px] h-7"
-                onClick={() => {
-                  const all = {};
-                  damagedOrder?.order_details?.forEach(d => all[d.order_detail_id] = d.quantity);
-                  setDamagedItems(all);
-                }}
-              >
-                Hỏng tất cả
-              </Button>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="text-[10px] h-7"
-                onClick={() => setDamagedItems({})}
-              >
-                Bỏ chọn
-              </Button>
-            </div>
           </DialogHeader>
-          <div className="space-y-4 py-4 max-h-[50vh] overflow-y-auto px-1">
-            {damagedOrder?.order_details?.map(detail => (
-              <div key={detail.order_detail_id} className="flex items-center justify-between gap-4 p-2 border rounded">
+          <div className="space-y-3 py-4 max-h-[50vh] overflow-y-auto px-1">
+            {(damagedOrder?.order_details || []).map(detail => (
+              <div key={detail.order_detail_id} className="flex items-center justify-between gap-4 p-3 border rounded-lg">
                 <div className="flex-1">
                   <p className="text-sm font-medium">{detail.product_name}</p>
-                  <p className="text-xs text-muted-foreground">Tổng nhận: {detail.quantity}</p>
+                  <p className="text-xs text-muted-foreground">Tổng đặt: {detail.quantity}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Label className="text-xs whitespace-nowrap text-red-600">Hỏng:</Label>
-                  <Input 
+                  <Label className="text-xs whitespace-nowrap text-red-600">Số hỏng:</Label>
+                  <Input
                     type="number"
                     min="0"
                     max={detail.quantity}
-                    className="w-20 h-8 border-red-200"
+                    className="w-20 h-8"
                     value={damagedItems[detail.order_detail_id] || ''}
+                    placeholder="0"
                     onChange={(e) => handleDamagedQtyChange(detail.order_detail_id, e.target.value, detail.quantity)}
                   />
                 </div>
@@ -609,51 +542,31 @@ export default function OrderHistory() {
         </DialogContent>
       </Dialog>
 
+      {/* Báo thiếu dialog - with quantity input */}
       <Dialog open={!!partialOrder} onOpenChange={(open) => !open && setPartialOrder(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Báo thiếu hàng - Đơn #{partialOrder?.order_id}</DialogTitle>
+            <DialogTitle>Báo thiếu - Đơn #{partialOrder?.order_id}</DialogTitle>
             <DialogDescription>
               Nhập số lượng thực tế bị thiếu cho từng sản phẩm. Hệ thống sẽ tạo đơn bù SUPPLEMENT.
             </DialogDescription>
-            <div className="flex gap-2 mt-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="text-[10px] h-7"
-                onClick={() => {
-                  const all = {};
-                  partialOrder?.order_details?.forEach(d => all[d.order_detail_id] = d.quantity);
-                  setMissingItems(all);
-                }}
-              >
-                Thiếu tất cả
-              </Button>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="text-[10px] h-7"
-                onClick={() => setMissingItems({})}
-              >
-                Bỏ chọn
-              </Button>
-            </div>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            {partialOrder?.order_details?.map(detail => (
-              <div key={detail.order_detail_id} className="flex items-center justify-between gap-4 p-2 border rounded">
+          <div className="space-y-3 py-4 max-h-[50vh] overflow-y-auto px-1">
+            {(partialOrder?.order_details || []).map(detail => (
+              <div key={detail.order_detail_id} className="flex items-center justify-between gap-4 p-3 border rounded-lg">
                 <div className="flex-1">
                   <p className="text-sm font-medium">{detail.product_name}</p>
                   <p className="text-xs text-muted-foreground">Tổng đặt: {detail.quantity}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Label className="text-xs whitespace-nowrap">Thiếu:</Label>
-                  <Input 
+                  <Label className="text-xs whitespace-nowrap text-orange-600">Số thiếu:</Label>
+                  <Input
                     type="number"
                     min="0"
                     max={detail.quantity}
                     className="w-20 h-8"
                     value={missingItems[detail.order_detail_id] || ''}
+                    placeholder="0"
                     onChange={(e) => handleMissingQtyChange(detail.order_detail_id, e.target.value, detail.quantity)}
                   />
                 </div>
