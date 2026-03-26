@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { getOrdersByStore, fetchOrders, updateOrderStatus, createWasteLog, createAdditionalOrder, getDeliveries } from '../../data/api';
+import { getOrdersByStore, fetchOrders, updateOrderStatus, createWasteLog, createAdditionalOrder, getDeliveries, updateDeliveryStatus } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -122,6 +122,27 @@ export default function OrderHistory() {
     setCancelOrder(null);
   };
 
+  const checkAndCompleteDelivery = async (deliveryId) => {
+    if (!deliveryId) return;
+    try {
+      // 1. Fetch all orders (we need to see their latest statuses)
+      const allOrders = await fetchOrders();
+      const deliveryOrders = allOrders.filter(o => o.delivery_id === deliveryId);
+      
+      if (deliveryOrders.length === 0) return;
+
+      // 2. Check if all orders are in a terminal state: DONE or DAMAGED
+      const allFinished = deliveryOrders.every(o => o.status === 'DONE' || o.status === 'DAMAGED');
+      
+      if (allFinished) {
+        // 3. Update Delivery status to DONE
+        await updateDeliveryStatus(deliveryId, 'DONE');
+      }
+    } catch (e) {
+      console.warn('Auto-complete delivery failed:', e);
+    }
+  };
+
   const handleFinalizeOrder = async (order) => {
     setIsSubmitting(true);
     const currentComment = order.comment || '';
@@ -130,26 +151,19 @@ export default function OrderHistory() {
     // UI Hiding first (Optimistic)
     setOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, comment: newComment, status: 'DONE' } : o));
     
-    // Hard persist in localStorage if server fails
-    try {
-      const finalized = JSON.parse(localStorage.getItem('finalized_orders') || '[]');
-      if (!finalized.includes(order.order_id)) {
-        localStorage.setItem('finalized_orders', JSON.stringify([...finalized, order.order_id]));
-      }
-    } catch (e) { console.warn('LocalStorage error:', e); }
-
     try {
       await updateOrderStatus(order.order_id, 'DONE', newComment);
       toast.success(`Đơn hàng #${order.order_id} đã được đối soát hoàn tất.`);
+      
+      // Auto-check for delivery completion
+      if (order.delivery_id) {
+        await checkAndCompleteDelivery(order.delivery_id);
+      }
+
       reloadDashboard();
     } catch (e) {
-      // If it's 500 but it was likely processed or user just wants it gone
-      console.warn('Finalize API failed, but keeping UI state:', e);
-      if (e.message?.includes('500') || e.message?.includes('Internal Server Error')) {
-        toast.info(`Đơn #${order.order_id} đã được đánh dấu hoàn tất trên giao diện.`);
-      } else {
-        toast.error('Lỗi khi hoàn tất: ' + e.message);
-      }
+      console.warn('Finalize API failed:', e);
+      toast.error('Lỗi khi hoàn tất: ' + e.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -170,8 +184,11 @@ export default function OrderHistory() {
         return `${detail?.product_name || id} hỏng ${qty}`;
       });
       
+      const damagedIdsTag = ` [DAMAGED_IDS: ${damagedProductIds.join(',')}]`;
+      
       // 1. Update status and Log Waste
-      await updateOrderStatus(damagedOrder.order_id, 'DAMAGED', `Cửa hàng báo hỏng: ${noteParts.join(', ')}`);
+      // Step 808: Store-side damage/missing items also set status to DONE
+      await updateOrderStatus(damagedOrder.order_id, 'DONE', `Cửa hàng báo hỏng: ${noteParts.join(', ')}${damagedIdsTag} FINAL`);
       
       await Promise.all(damagedEntries.map(([id, qty]) => {
         const detail = damagedOrder.order_details.find(d => String(d.order_detail_id) === id || String(d.product_id) === id);
@@ -201,6 +218,12 @@ export default function OrderHistory() {
       }).catch(e => console.error('Auto-supplement failed:', e));
 
       toast.success('Đã báo cáo hàng hỏng và tự động tạo đơn bù SUPPLEMENT.');
+      
+      // Auto-check for delivery completion
+      if (damagedOrder.delivery_id) {
+        await checkAndCompleteDelivery(damagedOrder.delivery_id);
+      }
+
       reloadDashboard();
       setDamagedOrder(null);
       setDamagedItems({});
@@ -220,16 +243,22 @@ export default function OrderHistory() {
       return;
     }
 
+    const missingProductIds = missingEntries.map(([id, _]) => {
+      const detail = partialOrder.order_details.find(d => String(d.order_detail_id) === id);
+      return detail?.product_id;
+    }).filter(Boolean);
+    const missingIdsTag = ` [MISSING_IDS: ${missingProductIds.join(',')}]`;
+
     setIsSubmitting(true);
     try {
-      // Flow 1 Step 6 Risk 1: Update status to PARTIAL_DELIVERED
-      // Rule: NO new supplement order. Warehouse will create a new Receipt for this same order id.
+      // Flow 1 Step 6 Risk 1: Update status to DONE
+      // Rule: Create supplement order.
       const note = missingEntries.map(([id, qty]) => {
         const detail = partialOrder.order_details.find(d => String(d.order_detail_id) === id);
         return `${detail.product_name} thiếu ${qty}`;
       }).join(', ');
 
-      await updateOrderStatus(partialOrder.order_id, 'PARTIAL_DELIVERED', `Giao thiếu: ${note}`);
+      await updateOrderStatus(partialOrder.order_id, 'DONE', `Giao thiếu: ${note}${missingIdsTag} FINAL`);
       
       // 2. AUTO CREATE SUPPLEMENT ORDER
       const supplementDetails = missingEntries.map(([id, qty]) => {
@@ -248,6 +277,12 @@ export default function OrderHistory() {
       }).catch(e => console.error('Auto-supplement failed:', e));
 
       toast.success('Đã báo thiếu hàng và tự động tạo đơn bù SUPPLEMENT.');
+      
+      // Auto-check for delivery completion
+      if (partialOrder.delivery_id) {
+        await checkAndCompleteDelivery(partialOrder.delivery_id);
+      }
+
       reloadDashboard();
       setPartialOrder(null);
       setMissingItems({});
@@ -460,17 +495,31 @@ export default function OrderHistory() {
                              </p>
                           </div>
                         )}
-                        {details.map((detail) => (
-                        <div
-                          key={detail.order_detail_id || detail.product_id}
-                          className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
-                        >
-                          <div>
-                            <p className="font-medium">{detail.product_name || `SP #${detail.product_id}`}</p>
-                            <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
-                          </div>
-                        </div>
-                      ))}
+                        {details.map((detail) => {
+                          const comment = order.comment || '';
+                          const isDamaged = comment.includes('[DAMAGED_IDS:') && 
+                                            comment.split('[DAMAGED_IDS:')[1].split(']')[0].split(',').includes(String(detail.product_id));
+                          const isMissing = comment.includes('[MISSING_IDS:') && 
+                                            comment.split('[MISSING_IDS:')[1].split(']')[0].split(',').includes(String(detail.product_id));
+
+                          return (
+                            <div
+                              key={detail.order_detail_id || detail.product_id}
+                              className={`flex items-center justify-between p-3 rounded-lg ${isDamaged ? 'bg-red-50 border border-red-100' : isMissing ? 'bg-orange-50 border border-orange-100' : 'bg-muted/50'}`}
+                            >
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <p className={`font-medium ${isDamaged ? 'text-red-700' : isMissing ? 'text-orange-700' : ''}`}>
+                                    {detail.product_name || `SP #${detail.product_id}`}
+                                  </p>
+                                  {isDamaged && <Badge variant="destructive" className="h-5 text-[10px] px-1 bg-red-600">HỎNG</Badge>}
+                                  {isMissing && <Badge variant="secondary" className="h-5 text-[10px] px-1 bg-orange-500 text-white hover:bg-orange-600">THIẾU</Badge>}
+                                </div>
+                                <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   </CardContent>
                 </CollapsibleContent>

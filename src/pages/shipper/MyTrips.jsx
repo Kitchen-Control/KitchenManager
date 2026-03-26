@@ -8,7 +8,8 @@ import {
   updateReceiptStatus,
   createWasteLog,
   getOrderById,
-  createAdditionalOrder
+  createAdditionalOrder,
+  getOrderDetailsByOrderId
 } from '../../data/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -48,6 +49,32 @@ export default function MyTrips() {
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [selectedDelivery, setSelectedDelivery] = useState(null);
   const [orderOutcomes, setOrderOutcomes] = useState({}); // { orderId: { damagedProducts: { productId: boolean }, details: [], receipts: [], storeId: number } }
+  const [localDelivered, setLocalDelivered] = useState({}); // { deliveryId: { orderId: boolean } }
+  const [showOrderDialog, setShowOrderDialog] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+
+  // Load local delivered state
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('shipper_delivered_orders');
+      if (saved) setLocalDelivered(JSON.parse(saved));
+    } catch (e) { console.error('Failed to load delivered state:', e); }
+  }, []);
+
+  // Save local delivered state
+  const markAsDelivered = (deliveryId, orderId) => {
+    setLocalDelivered(prev => {
+      const newMap = {
+        ...prev,
+        [deliveryId]: {
+          ...(prev[deliveryId] || {}),
+          [orderId]: !prev[deliveryId]?.[orderId]
+        }
+      };
+      localStorage.setItem('shipper_delivered_orders', JSON.stringify(newMap));
+      return newMap;
+    });
+  };
 
   const fetchData = useCallback(async () => {
     if (!user?.user_id) return;
@@ -97,48 +124,50 @@ export default function MyTrips() {
     }
   };
 
-  const handleOpenCompleteDialog = async (delivery) => {
+  const handleOpenOrderDialog = async (delivery, order) => {
     setProcessingId(delivery.delivery_id);
-
-    // Fetch tất cả orders song song thay vì tuần tự
-    const results = await Promise.all(
-      (delivery.orders || []).map(async (order) => {
-        const receipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
-        const exportReceipts = receipts.filter(r => r.type === 'EXPORT' || !r.type);
-
-        let detailsToUse = order.order_details || [];
-        if (detailsToUse.length === 0) {
-          try {
-            const fetchedDetails = await getOrderDetailsByOrderId(order.order_id);
-            if (fetchedDetails && fetchedDetails.length > 0) detailsToUse = fetchedDetails;
-          } catch (e) {
-            console.error(`Failed to fetch details for order #${order.order_id}:`, e);
-          }
-        }
-
-        const finalDetails = detailsToUse.length > 0 ? detailsToUse : (exportReceipts[0]?.receipt_details || []);
-        const initialDamagedProducts = {};
-        finalDetails.forEach(d => { initialDamagedProducts[d.product_id] = false; });
-
-        return {
-          orderId: order.order_id,
-          outcome: {
-            damagedProducts: initialDamagedProducts,
-            details: finalDetails,
-            receipts: exportReceipts,
-            storeId: order.store?.storeId || order.store_id || order.sender_id,
-          }
-        };
-      })
-    );
-
-    const initialOutcomes = {};
-    results.forEach(({ orderId, outcome }) => { initialOutcomes[orderId] = outcome; });
-
-    setOrderOutcomes(initialOutcomes);
-    setProcessingId(null);
     setSelectedDelivery(delivery);
-    setShowCompleteDialog(true);
+    
+    // Fetch order details if missing
+    try {
+      const receipts = await getReceiptsByOrderId(order.order_id).catch(() => []);
+      const exportReceipts = receipts.filter(r => r.type === 'EXPORT' || !r.type);
+
+      let detailsToUse = order.order_details || [];
+      if (detailsToUse.length === 0) {
+        const fetchedDetails = await getOrderDetailsByOrderId(order.order_id);
+        if (fetchedDetails && fetchedDetails.length > 0) detailsToUse = fetchedDetails;
+      }
+
+      const finalDetails = detailsToUse.length > 0 ? detailsToUse : (exportReceipts[0]?.receipt_details || []);
+      const initialDamagedProducts = {};
+      finalDetails.forEach(d => { 
+        initialDamagedProducts[d.product_id] = orderOutcomes[order.order_id]?.damagedProducts?.[d.product_id] || false; 
+      });
+
+      setOrderOutcomes(prev => ({
+        ...prev,
+        [order.order_id]: {
+          damagedProducts: initialDamagedProducts,
+          details: finalDetails,
+          receipts: exportReceipts,
+          storeId: order.store?.storeId || order.store_id || order.sender_id,
+        }
+      }));
+      
+      setSelectedOrder(order);
+      setShowOrderDialog(true);
+    } catch (error) {
+      toast.error('Lỗi tải chi tiết đơn hàng: ' + error.message);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleConfirmOrderDelivery = (orderId) => {
+    markAsDelivered(selectedDelivery.delivery_id, orderId);
+    setShowOrderDialog(false);
+    toast.success(`Đã xác nhận giao đơn #${orderId}`);
   };
 
   const handleFinalizeTrip = async () => {
@@ -152,8 +181,9 @@ export default function MyTrips() {
 
         if (isAnyDamaged) {
           // Chỉ đơn hàng có sản phẩm hỏng mới update status → DAMAGED
+          const damagedIdsTag = ` [DAMAGED_IDS: ${damagedProductIds.join(',')}]`;
           try {
-            await updateOrderStatus(parseInt(orderId), 'DAMAGED', 'Shipper báo hỏng sản phẩm');
+            await updateOrderStatus(parseInt(orderId), 'DAMAGED', `Shipper báo hỏng sản phẩm${damagedIdsTag}`);
           } catch (e) {
             console.warn(`Order #${orderId} DAMAGED update failed:`, e);
           }
@@ -271,6 +301,21 @@ export default function MyTrips() {
                       ))}
                     </div>
                   )}
+                  <div className="mt-3 pt-2 border-t flex justify-end">
+                    <Button
+                      size="sm"
+                      variant={localDelivered[delivery.delivery_id]?.[order.order_id] ? "ghost" : "default"}
+                      className={`h-8 text-xs ${localDelivered[delivery.delivery_id]?.[order.order_id] ? "text-green-600 font-bold" : "bg-blue-600 hover:bg-blue-700"}`}
+                      onClick={() => handleOpenOrderDialog(delivery, order)}
+                      disabled={order.status === 'DAMAGED' || isDone || localDelivered[delivery.delivery_id]?.[order.order_id]}
+                    >
+                      {localDelivered[delivery.delivery_id]?.[order.order_id] ? (
+                        <><CheckCircle2 className="h-3 w-3 mr-1" /> Đã giao xong</>
+                      ) : (
+                        "Kiểm tra hàng"
+                      )}
+                    </Button>
+                  </div>
                 </div>
               ))}
               {orders.length === 0 && (
@@ -293,11 +338,21 @@ export default function MyTrips() {
             {canComplete && (
               <Button 
                 className="w-full bg-green-600 hover:bg-green-700 h-10 font-bold"
-                onClick={() => handleOpenCompleteDialog(delivery)}
+                onClick={() => {
+                  const tripFinished = (delivery.orders || []).every(o => 
+                    localDelivered[delivery.delivery_id]?.[o.order_id] || o.status === 'DAMAGED'
+                  );
+                  if (!tripFinished) {
+                    toast.error('Vui lòng kiểm hàng và ấn "Giao thành công" cho tất cả các đơn hàng.');
+                    return;
+                  }
+                  setSelectedDelivery(delivery);
+                  setShowCompleteDialog(true);
+                }}
                 disabled={isProcessing}
               >
                 {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-                Hoàn tất chuyến đi & Đối soát
+                Xác nhận & Hoàn tất chuyến đi
               </Button>
             )}
             {isDone && (
@@ -346,80 +401,83 @@ export default function MyTrips() {
         </div>
       )}
 
-      <Dialog open={showCompleteDialog} onOpenChange={setShowCompleteDialog}>
-        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+      <Dialog open={showOrderDialog} onOpenChange={setShowOrderDialog}>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Đối soát & Hoàn tất chuyến #{selectedDelivery?.delivery_id}</DialogTitle>
+            <DialogTitle>Kiểm hàng Đơn #{selectedOrder?.order_id}</DialogTitle>
             <DialogDescription>
-              Đánh dấu nếu có đơn vị từ chối/hỏng. Các đơn hàng bình thường sẽ giữ trạng thái Đang Giao cho đến khi Cửa hàng xác nhận.
+              Kiểm tra từng sản phẩm và báo hỏng nếu có. Sau đó ấn "Giao thành công".
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            {selectedDelivery?.orders.map(order => {
-              const outcome = orderOutcomes[order.order_id] || { damagedProducts: {} };
-              const products = outcome.details || [];
-              
-              return (
-                <div key={order.order_id} className="p-4 rounded-xl border bg-slate-50/50 space-y-3">
-                  <div className="flex justify-between items-center pb-2 border-b">
-                    <span className="font-bold text-indigo-900 underline underline-offset-4">Đơn hàng #{order.order_id}</span>
-                    <Badge variant="outline" className="bg-white">{order.store_name}</Badge>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-slate-500 flex items-center gap-1">
-                      <ClipboardList className="h-3 w-3" /> Chi tiết sản phẩm:
-                    </p>
-                    {products.map(product => {
-                      const isDamaged = outcome.damagedProducts[product.product_id];
-                      return (
-                        <div key={product.product_id} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
-                          <span className={isDamaged ? "text-red-600 font-medium" : ""}>
-                            {product.product_name} <span className="text-muted-foreground text-xs">x{product.quantity}</span>
-                          </span>
-                          <Button 
-                            variant={isDamaged ? 'destructive' : 'outline'}
-                            size="sm"
-                            onClick={() => setOrderOutcomes(prev => {
-                              const orderOutcome = prev[order.order_id];
-                              return {
-                                ...prev,
-                                [order.order_id]: {
-                                  ...orderOutcome,
-                                  damagedProducts: {
-                                    ...orderOutcome.damagedProducts,
-                                    [product.product_id]: !isDamaged
-                                  }
-                                }
-                              };
-                            })}
-                            className={`h-7 px-2 text-[10px] ${isDamaged ? 'bg-red-600 hover:bg-red-700 font-bold' : 'text-slate-500 border-slate-200'}`}
-                          >
-                            {isDamaged ? (
-                              <><PackageX className="h-3 w-3 mr-1" /> Hỏng</>
-                            ) : (
-                              <><PackageX className="h-3 w-3 mr-1" /> Báo hỏng</>
-                            )}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {Object.values(outcome.damagedProducts).some(v => v) && (
-                    <div className="p-2 bg-red-50 rounded border border-red-100 flex gap-2">
-                      <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
-                      <p className="text-[10px] text-red-800">
-                        Sản phẩm đánh dấu hỏng sẽ được tạo đơn bù SUPPLEMENT tự động.
-                      </p>
-                    </div>
-                  )}
+            {selectedOrder && (
+              <div className="p-4 rounded-xl border bg-slate-50/50 space-y-3">
+                <div className="flex justify-between items-center pb-2 border-b">
+                  <span className="font-bold text-indigo-900">Cửa hàng: {selectedOrder.store_name}</span>
                 </div>
-              );
-            })}
+
+                <div className="space-y-2">
+                  {(orderOutcomes[selectedOrder.order_id]?.details || []).map(product => {
+                    const isDamaged = orderOutcomes[selectedOrder.order_id]?.damagedProducts[product.product_id];
+                    return (
+                      <div key={product.product_id} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
+                        <span className={isDamaged ? "text-red-600 font-medium" : ""}>
+                          {product.product_name} <span className="text-muted-foreground text-xs">x{product.quantity}</span>
+                        </span>
+                        <Button 
+                          variant={isDamaged ? 'destructive' : 'outline'}
+                          size="sm"
+                          onClick={() => setOrderOutcomes(prev => {
+                            const outcome = prev[selectedOrder.order_id];
+                            return {
+                              ...prev,
+                              [selectedOrder.order_id]: {
+                                ...outcome,
+                                damagedProducts: {
+                                  ...outcome.damagedProducts,
+                                  [product.product_id]: !isDamaged
+                                }
+                              }
+                            };
+                          })}
+                          className={`h-7 px-2 text-[10px] ${isDamaged ? 'bg-red-600' : 'text-slate-500'}`}
+                        >
+                          <PackageX className="h-3 w-3 mr-1" /> {isDamaged ? 'Hỏng' : 'Báo hỏng'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowOrderDialog(false)}>Bỏ qua</Button>
+            <Button 
+              className="bg-green-600 hover:bg-green-700" 
+              onClick={() => handleConfirmOrderDelivery(selectedOrder.order_id)}
+            >
+              Giao thành công
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCompleteDialog} onOpenChange={setShowCompleteDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Hoàn tất chuyến đi #{selectedDelivery?.delivery_id}</DialogTitle>
+            <DialogDescription>
+              Bạn đã giao xong tất cả các đơn hàng. Xác nhận để kết thúc chuyến đi và cập nhật báo cáo.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <p className="text-sm text-slate-600">
+              Hệ thống sẽ tự động tạo đơn bù và waste log cho các sản phẩm bạn đã báo hỏng.
+            </p>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCompleteDialog(false)}>Đóng</Button>
             <Button 
@@ -427,8 +485,7 @@ export default function MyTrips() {
               onClick={handleFinalizeTrip}
               disabled={!!processingId}
             >
-              {processingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-              Xác nhận & Hoàn tất
+              {processingId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : "Xác nhận & Hoàn tất"}
             </Button>
           </DialogFooter>
         </DialogContent>
