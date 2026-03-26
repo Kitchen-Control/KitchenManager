@@ -461,7 +461,9 @@ export default function OrderHistory() {
                         >
                           <div>
                             <p className="font-medium">{detail.product_name || `SP #${detail.product_id}`}</p>
-                            <p className="text-sm text-muted-foreground">x{detail.quantity}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {detail.price ? `${detail.price.toLocaleString('vi-VN')}đ` : '???'} x {detail.quantity}
+                            </p>
                           </div>
                           {detail.price > 0 && (
                             <p className="text-sm font-semibold">

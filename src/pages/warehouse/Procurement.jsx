@@ -12,7 +12,7 @@ import { Loader2, ShoppingCart, CheckCircle2, Package, RefreshCw, AlertCircle, H
 import { toast } from 'sonner';
 
 export default function WarehouseProcurement() {
-  const [activeTab, setActiveTab] = useState('waiting');
+  const [activeTab, setActiveTab] = useState('purchase');
   const [materials, setMaterials] = useState([]);
   const [batches, setBatches] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,23 +46,20 @@ export default function WarehouseProcurement() {
     fetchData();
   }, []);
 
-  const waitingBatches = batches.filter(b => b.status === 'WAITING_TO_CONFIRM');
-  const confirmedBatches = batches.filter(b => b.status === 'DONE').sort((a,b) => b.batch_id - a.batch_id);
+  // API trả về mọi lô hàng, Warehouse Procurement chỉ xem lịch sử lô hàng mua ngoài do Flow quy định (chỉ cho warehouse xem PURCHASE)
+  const confirmedBatches = batches.filter(b => b.status === 'DONE' && b.type === 'PURCHASE').sort((a,b) => b.batch_id - a.batch_id);
 
-  const handleConfirmBatch = async (batchId) => {
-    try {
-      await updateLogBatchStatus(batchId, 'DONE');
-      toast.success('Đã xác nhận nhập kho và cập nhật tồn kho!');
-      fetchData();
-    } catch (error) {
-      toast.error('Lỗi xác nhận: ' + error.message);
-    }
-  };
+  // Validation logic
+  const isQuantityInvalid = formData.quantity !== '' && Number(formData.quantity) <= 0;
 
   const handlePurchaseSubmit = async (e) => {
     e.preventDefault();
     if (!formData.productId || !formData.quantity || !formData.expiryDate) {
       toast.error('Vui lòng điền đủ thông tin');
+      return;
+    }
+    if (isQuantityInvalid) {
+      toast.error('Số lượng nhập phải lớn hơn 0');
       return;
     }
     setIsSubmitting(true);
@@ -104,7 +101,7 @@ export default function WarehouseProcurement() {
         <Button variant="outline" onClick={fetchData}><RefreshCw className="h-4 w-4 mr-2" /> Làm mới</Button>
       </div>
 
-      <Tabs defaultValue="waiting" onValueChange={setActiveTab} className="space-y-4">
+      <Tabs defaultValue="purchase" onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
           <TabsTrigger value="purchase">Nhập mua ngoài</TabsTrigger>
           <TabsTrigger value="history">Lịch sử nhập</TabsTrigger>
@@ -128,7 +125,16 @@ export default function WarehouseProcurement() {
                 </div>
                 <div className="space-y-2">
                   <Label>Số lượng</Label>
-                  <Input type="number" step="0.1" value={formData.quantity} onChange={e => setFormData({ ...formData, quantity: e.target.value })} />
+                  <Input 
+                    type="number" 
+                    step="0.1" 
+                    value={formData.quantity} 
+                    onChange={e => setFormData({ ...formData, quantity: e.target.value })}
+                    className={isQuantityInvalid ? "border-red-500 focus-visible:ring-red-500" : ""}
+                  />
+                  {isQuantityInvalid && (
+                    <p className="text-sm text-red-500">Số lượng không được nhỏ hơn hoặc bằng 0</p>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
