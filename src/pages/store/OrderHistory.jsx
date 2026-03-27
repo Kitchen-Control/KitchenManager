@@ -346,12 +346,10 @@ export default function OrderHistory() {
           const isFinalized = order.status === 'CANCELED' ||
                               (order.comment || '').toUpperCase().includes('STORE_');
 
-          // isShipperDone: shipper confirmed this order (set via API to DELIVERED/PARTIAL_DELIVERED/DAMAGED)
-          // Also accept localStorage signal for immediate UI feedback before page reload
-          const isShipperDone = !isFinalized && (
-            ['DELIVERED', 'PARTIAL_DELIVERED', 'DAMAGED'].includes(order.status) ||
-            localStorage.getItem(`shipper_confirmed_${order.order_id}`) === 'true'
-          );
+          // isShipperDone: Shipper confirmed via API → order status is DELIVERED/PARTIAL_DELIVERED/DAMAGED
+          // Do NOT use localStorage — it persists across sessions and causes stale signals on other browsers
+          const isShipperDone = !isFinalized &&
+            ['DELIVERED', 'PARTIAL_DELIVERED', 'DAMAGED'].includes(order.status);
           const canCancel = order.status === 'WAITING';
           const canFinalizeFlow = isShipperDone && !isFinalized;
 
