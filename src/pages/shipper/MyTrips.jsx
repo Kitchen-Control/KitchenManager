@@ -178,7 +178,6 @@ export default function MyTrips() {
       await updateOrderStatus(parseInt(orderId), newOrderStatus, 'SHIPPER_DONE');
 
       // Write localStorage so Store UI updates immediately (before next reload)
-      localStorage.setItem(`shipper_confirmed_${orderId}`, 'true');
       markAsDelivered(deliveryId, orderId);
       toast.success(`Đã xác nhận giao đơn #${orderId}. Chờ Store đối soát.`);
       fetchData();
