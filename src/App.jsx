@@ -26,6 +26,7 @@ import Deliveries from "./pages/coordinator/Deliveries";
 // Manager pages
 import ProductionPlanning from "./pages/manager/ProductionPlanning";
 import ManagerReports from "./pages/manager/ManagerReports";
+import ManagerFeedback from "./pages/manager/ManagerFeedback";
 
 // Kitchen pages
 import KitchenDashboard from "./pages/kitchen/Dashboard";
@@ -102,6 +103,8 @@ const App = () => (
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.MANAGER, ROLE_ID.ADMIN]}><Outlet /></ProtectedRoute>}>
                   <Route path="/manager" element={<ManagerReports />} />
                   <Route path="/manager/planning" element={<ProductionPlanning />} />
+                  <Route path="/manager/reports" element={<ManagerReports />} />
+                  <Route path="/manager/feedback" element={<ManagerFeedback />} />
                 </Route>
 
                 {/* Kitchen routes */}
