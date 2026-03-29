@@ -39,19 +39,32 @@ export default function Products() {
   }, []);
 
   const handleCreate = async () => {
-    if (!formData.productName || !formData.productType || !formData.unit || !formData.shelfLifeDay || !formData.price) {
+    if (!formData.productName.trim() || !formData.productType || !formData.unit || !formData.shelfLifeDay || !formData.price) {
       toast.error('Vui lòng điền đầy đủ thông tin');
+      return;
+    }
+
+    const shelfLife = Number(formData.shelfLifeDay);
+    const price = Number(formData.price);
+
+    if (isNaN(shelfLife) || shelfLife <= 0 || !Number.isInteger(shelfLife)) {
+      toast.error('Hạn sử dụng phải là số nguyên lớn hơn 0 (ngày)');
+      return;
+    }
+
+    if (isNaN(price) || price < 0) {
+      toast.error('Giá bán phải là số lớn hơn hoặc bằng 0');
       return;
     }
 
     setIsSubmitting(true);
     try {
       await createProduct({
-        productName: formData.productName,
+        productName: formData.productName.trim(),
         productType: formData.productType,
         unit: formData.unit,
-        shelfLifeDay: Number(formData.shelfLifeDay),
-        price: Number(formData.price)
+        shelfLifeDay: shelfLife,
+        price: price
       });
       toast.success('Thêm sản phẩm thành công');
       setIsOpen(false);
@@ -91,9 +104,25 @@ export default function Products() {
                 </SelectContent>
               </Select>
 
-              <Input placeholder="Đơn vị tính (kg, cái...)" value={formData.unit} onChange={e => setFormData({...formData, unit: e.target.value})} />
-              <Input type="number" placeholder="Hạn sử dụng (ngày)" value={formData.shelfLifeDay} onChange={e => setFormData({...formData, shelfLifeDay: e.target.value})} />
-              <Input type="number" placeholder="Giá bán (VNĐ)" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} />
+              <Select onValueChange={v => setFormData({...formData, unit: v})} value={formData.unit}>
+                <SelectTrigger><SelectValue placeholder="Đơn vị tính" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="kg">kg</SelectItem>
+                  <SelectItem value="g">gram</SelectItem>
+                  <SelectItem value="lít">lít</SelectItem>
+                  <SelectItem value="ml">ml</SelectItem>
+                  <SelectItem value="hộp">hộp</SelectItem>
+                  <SelectItem value="gói">gói</SelectItem>
+                  <SelectItem value="chai">chai</SelectItem>
+                  <SelectItem value="lon">lon</SelectItem>
+                  <SelectItem value="thùng">thùng</SelectItem>
+                  <SelectItem value="cái">cái</SelectItem>
+                  <SelectItem value="phần">phần</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Input type="number" min="1" step="1" placeholder="Hạn sử dụng (ngày)" value={formData.shelfLifeDay} onChange={e => setFormData({...formData, shelfLifeDay: e.target.value})} />
+              <Input type="number" min="0" placeholder="Giá bán (VNĐ)" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} />
 
               <Button onClick={handleCreate} className="w-full">
                 {isSubmitting ? <Loader2 className="animate-spin" /> : 'Xác nhận'}

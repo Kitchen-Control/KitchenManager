@@ -24,7 +24,6 @@ import OrderAggregation from "./pages/coordinator/OrderAggregation";
 import Deliveries from "./pages/coordinator/Deliveries";
 
 // Manager pages
-import ManagerDashboard from "./pages/manager/ManagerDashboard";
 import ProductionPlanning from "./pages/manager/ProductionPlanning";
 import ManagerReports from "./pages/manager/ManagerReports";
 
@@ -101,9 +100,8 @@ const App = () => (
 
                 {/* Manager routes */}
                 <Route element={<ProtectedRoute allowedRoles={[ROLE_ID.MANAGER, ROLE_ID.ADMIN]}><Outlet /></ProtectedRoute>}>
-                  <Route path="/manager" element={<ManagerDashboard />} />
+                  <Route path="/manager" element={<ManagerReports />} />
                   <Route path="/manager/planning" element={<ProductionPlanning />} />
-                  <Route path="/manager/reports" element={<ManagerReports />} />
                 </Route>
 
                 {/* Kitchen routes */}
@@ -140,7 +138,7 @@ const App = () => (
                   <Route path="/admin/recipes" element={<Recipes />} />
                   <Route path="/admin/products" element={<Products />} />
                   <Route path="/admin/users" element={<Users />} />
-                  <Route path="/admin/reports" element={<ComingSoon title="Báo cáo" />} />
+                  <Route path="/admin/reports" element={<ManagerReports />} />
                   <Route path="/admin/settings" element={<ComingSoon title="Cài đặt" />} />
                 </Route>
               </Route>
