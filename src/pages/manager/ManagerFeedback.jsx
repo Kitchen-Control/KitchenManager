@@ -37,7 +37,12 @@ function Stars({ rating, size = 'sm' }) {
       {[1, 2, 3, 4, 5].map((s) => (
         <Star
           key={s}
-          className={cn(sz, s <= rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200')}
+          className={sz}
+          style={
+            s <= rating
+              ? { fill: '#fbbf24', color: '#fbbf24' }
+              : { fill: 'none', color: '#cbd5e1' }
+          }
         />
       ))}
     </div>
@@ -103,8 +108,8 @@ export default function ManagerFeedback() {
     setIsLoading(true);
     try {
       const [fbData, storeData] = await Promise.all([
-        getAllFeedbacks().catch(() => []),
-        getAllStores().catch(() => []),
+        getAllFeedbacks().catch((err) => { console.error('[ManagerFeedback] getAllFeedbacks:', err); return []; }),
+        getAllStores().catch((err) => { console.error('[ManagerFeedback] getAllStores:', err); return []; }),
       ]);
       setFeedbacks(Array.isArray(fbData) ? fbData : []);
       setStores(Array.isArray(storeData) ? storeData : []);
