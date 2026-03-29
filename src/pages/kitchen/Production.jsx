@@ -53,7 +53,25 @@ export default function Production() {
   }, []);
 
   const openDialog = (detail, planId) => {
-    setSelectedDetail({ ...detail, planId });
+    // 1. Tìm các lô đã tạo cho sản phẩm này trong kế hoạch này
+    const existingBatches = batches.filter(b => 
+      (Number(b.planId) === Number(planId) || Number(b.plan_id) === Number(planId)) && 
+      (Number(b.productId) === Number(detail.productId) || Number(b.product_id) === Number(detail.productId))
+    );
+    
+    // 2. Tính tổng số lượng đã đưa vào sản xuất
+    const producedQty = existingBatches.reduce((sum, b) => sum + Number(b.quantity), 0);
+    
+    // 3. Tính số lượng còn lại cần làm
+    const remainingQty = Math.max(0, Number(detail.quantity) - producedQty);
+
+    if (remainingQty <= 0) {
+      toast.info('Sản phẩm này đã tạo đủ số lượng lô yêu cầu!');
+      return; // Dừng lại, không mở popup
+    }
+
+    // 4. Lưu thêm remainingQty và producedQty vào state
+    setSelectedDetail({ ...detail, planId, remainingQty, producedQty });
     setBatchForm({ quantity_batches: '1', productionDate: today });
     setDialogOpen(true);
   };
@@ -66,7 +84,8 @@ export default function Production() {
 
     const planId = Number(selectedDetail.planId || selectedDetail.plan_id);
     const productId = Number(selectedDetail.productId || selectedDetail.product_id);
-    const targetQty = Number(selectedDetail.quantity);
+    // SỬA Ở ĐÂY: Dùng remainingQty thay vì quantity gốc
+    const targetQty = Number(selectedDetail.remainingQty); 
     const numBatches = Number(batchForm.quantity_batches);
 
     if (isNaN(planId) || isNaN(productId) || numBatches <= 0) {
@@ -74,7 +93,7 @@ export default function Production() {
       return;
     }
 
-    // Logic: Split target quantity among numBatches
+    // Phần logic chia lô (giữ nguyên của bạn)
     const qtyPerBatch = Math.floor(targetQty / numBatches);
     const batchesArray = Array.from({ length: numBatches }).map((_, i) => ({
       planId,
@@ -84,6 +103,8 @@ export default function Production() {
       expiryDate: null,
       type: 'PRODUCTION'
     }));
+
+    // ... (Giữ nguyên phần gọi API createProLogBatch bên dưới của bạn) ...
 
     setIsSubmitting(true);
     try {
@@ -401,70 +422,70 @@ export default function Production() {
       </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold text-orange-600">Bắt đầu sản xuất</DialogTitle>
-            <DialogDescription className="font-medium text-gray-500 italic">
-              Sản phẩm: <span className="text-foreground not-italic font-bold">{selectedDetail?.productName}</span>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label className="font-bold text-gray-700">Số lượng lô (Lot count) *</Label>
-                <span className="text-xs text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded border">
-                  1 lô = {selectedDetail?.quantity} SP
-                </span>
-              </div>
-              <Input
-                type="number"
-                min="1"
-                step="1"
-                placeholder="Nhập số lô (VD: 1, 2...)"
-                value={batchForm.quantity_batches}
-                onChange={e => {
-                  const val = e.target.value;
-                  if (val === '' || (/^\d+$/.test(val) && Number(val) > 0)) {
-                    setBatchForm({ ...batchForm, quantity_batches: val });
-                  }
-                }}
-                className="focus-visible:ring-orange-500 font-bold text-lg h-12"
-              />
-              <div className="flex justify-end pt-1">
-                <p className="text-sm font-medium text-muted-foreground">
-                  Tổng sản phẩm: <span className="text-orange-600 font-bold">{selectedDetail?.quantity}</span> (Chia làm {batchForm.quantity_batches || 0} lô)
-                </p>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label className="font-bold text-gray-700">Ngày sản xuất *</Label>
-                <span className="text-[10px] text-muted-foreground">
-                  Trong khoảng: {selectedDetail?.startDate && new Date(selectedDetail.startDate).toLocaleDateString('vi-VN')} - {selectedDetail?.endDate && new Date(selectedDetail.endDate).toLocaleDateString('vi-VN')}
-                </span>
-              </div>
-              <Input
-                type="date"
-                min={selectedDetail?.startDate ? new Date(selectedDetail.startDate).toISOString().split('T')[0] : ''}
-                max={selectedDetail?.endDate ? new Date(selectedDetail.endDate).toISOString().split('T')[0] : ''}
-                value={batchForm.productionDate}
-                onChange={e => setBatchForm({ ...batchForm, productionDate: e.target.value })}
-                className="focus-visible:ring-orange-500 font-medium"
-              />
-              <p className="text-[10px] text-orange-500 font-medium">
-                * Bếp được chọn ngày bắt đầu, không được vượt quá ngày kết thúc kế hoạch.
-              </p>
-            </div>
-            <div className="p-3 bg-orange-50 text-orange-800 rounded-lg text-xs leading-relaxed border border-orange-100 font-medium italic">
-              Lô sản xuất sẽ được tạo với trạng thái ban đầu là <strong>ĐANG NẤU</strong>. Hệ thống tự động tính toán tổng sản phẩm dựa trên số lô đã nhập.
-            </div>
-          </div>
-          <Button onClick={handleCreateBatch} disabled={isSubmitting} className="w-full bg-orange-500 hover:bg-orange-600 py-6 text-base font-bold shadow-lg">
-            {isSubmitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <ChefHat className="mr-2 h-5 w-5" />}
-            Bắt đầu sản xuất ngay
-          </Button>
-        </DialogContent>
-      </Dialog>
+  <DialogContent className="sm:max-w-[425px]">
+    <DialogHeader>
+      <DialogTitle className="text-xl font-bold text-orange-600">Bắt đầu sản xuất</DialogTitle>
+      <DialogDescription className="font-medium text-gray-500 italic">
+        Sản phẩm: <span className="text-foreground not-italic font-bold">{selectedDetail?.productName}</span>
+      </DialogDescription>
+    </DialogHeader>
+    <div className="grid gap-4 py-4">
+      <div className="space-y-2">
+        <div className="flex justify-between items-center">
+          <Label className="font-bold text-gray-700">Số lượng lô (Lot count) *</Label>
+          <span className="text-xs text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded border">
+            Cần làm thêm: {selectedDetail?.remainingQty} SP
+          </span>
+        </div>
+        <Input
+          type="number"
+          min="1"
+          step="1"
+          placeholder="Nhập số lô (VD: 1, 2...)"
+          value={batchForm.quantity_batches}
+          onChange={e => {
+            const val = e.target.value;
+            if (val === '' || (/^\d+$/.test(val) && Number(val) > 0)) {
+              setBatchForm({ ...batchForm, quantity_batches: val });
+            }
+          }}
+          className="focus-visible:ring-orange-500 font-bold text-lg h-12"
+        />
+        <div className="flex justify-end pt-1">
+          <p className="text-xs font-medium text-muted-foreground">
+            Mục tiêu: {selectedDetail?.quantity} | Đã tạo: {selectedDetail?.producedQty} | <span className="text-orange-600 font-bold">Chia lô: {selectedDetail?.remainingQty} SP</span>
+          </p>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <div className="flex justify-between items-center">
+          <Label className="font-bold text-gray-700">Ngày sản xuất *</Label>
+          <span className="text-[10px] text-muted-foreground">
+            Trong khoảng: {selectedDetail?.startDate && new Date(selectedDetail.startDate).toLocaleDateString('vi-VN')} - {selectedDetail?.endDate && new Date(selectedDetail.endDate).toLocaleDateString('vi-VN')}
+          </span>
+        </div>
+        <Input
+          type="date"
+          min={selectedDetail?.startDate ? new Date(selectedDetail.startDate).toISOString().split('T')[0] : ''}
+          max={selectedDetail?.endDate ? new Date(selectedDetail.endDate).toISOString().split('T')[0] : ''}
+          value={batchForm.productionDate}
+          onChange={e => setBatchForm({ ...batchForm, productionDate: e.target.value })}
+          className="focus-visible:ring-orange-500 font-medium"
+        />
+        <p className="text-[10px] text-orange-500 font-medium">
+          * Bếp được chọn ngày bắt đầu, không được vượt quá ngày kết thúc kế hoạch.
+        </p>
+      </div>
+      <div className="p-3 bg-orange-50 text-orange-800 rounded-lg text-xs leading-relaxed border border-orange-100 font-medium italic">
+        Lô sản xuất sẽ được chia dựa trên <strong className="underline">số lượng còn thiếu ({selectedDetail?.remainingQty} SP)</strong>. Trạng thái ban đầu là <strong>ĐANG NẤU</strong>.
+      </div>
+    </div>
+    <Button onClick={handleCreateBatch} disabled={isSubmitting} className="w-full bg-orange-500 hover:bg-orange-600 py-6 text-base font-bold shadow-lg">
+      {isSubmitting ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <ChefHat className="mr-2 h-5 w-5" />}
+      Tạo lô sản xuất
+    </Button>
+  </DialogContent>
+</Dialog>
     </div>
   );
 }

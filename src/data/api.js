@@ -492,19 +492,17 @@ export const createAdditionalOrder = async (parentOrderId, orderData) => {
  * @param {string} status - One of: WAITING, PROCESSING, DISPATCHED, DELIVERING, PARTIAL_DELIVERED, DONE, DAMAGED, CANCELED
  * @param {string} note
  */
-export const updateOrderStatus = async (orderId, status, note = '') => {
+export const updateOrderStatus = async (orderId, status, note = 'update') => {
   const params = new URLSearchParams();
   params.append('orderId', orderId);
   params.append('status', status);
-  if (note) params.append('note', note);
+  // Also pass note as query param for robustness
+  params.append('note', note);
 
-  // The spec path is PATCH /orders/update-status/{note}. We always use "update" as the fixed
-  // path segment to avoid 500s caused by arbitrary Vietnamese/special-char strings.
-  // The actual note value is passed via query param (already appended above).
+  // Use a fixed path segment 'update' to avoid 500s from complex strings in the path.
+  // The actual note is passed via query param.
   const response = await authFetch(`${API_BASE_URL}/orders/update-status/update?${params.toString()}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}) // Added empty body for some backends that require it
   });
   return await handleResponse(response);
 };
@@ -772,8 +770,15 @@ export const createDelivery = async (deliveryData) => {
  * status: WAITING | DELIVERING | DONE | CANCEL
  */
 export const updateDeliveryStatus = async (deliveryId, status) => {
-  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?status=${status}`, {
+  const params = new URLSearchParams();
+  params.append('status', status);
+  
+  const response = await authFetch(`${API_BASE_URL}/deliveries/${deliveryId}/status?${params.toString()}`, {
     method: 'PATCH',
+    headers: {
+        'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({}) // Some backends require a body for PATCH even if empty
   });
   return await handleResponse(response);
 };
