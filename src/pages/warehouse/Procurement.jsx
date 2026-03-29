@@ -139,7 +139,7 @@ export default function WarehouseProcurement() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Ngày nhập</Label>
-                    <Input type="date" value={formData.productionDate} onChange={e => setFormData({ ...formData, productionDate: e.target.value })} />
+                    <Input type="date" value={formData.productionDate} min={today} onChange={e => setFormData({ ...formData, productionDate: e.target.value })} />
                   </div>
                   <div className="space-y-2">
                     <Label>Hạn sử dụng</Label>
