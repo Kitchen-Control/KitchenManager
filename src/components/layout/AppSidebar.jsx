@@ -57,6 +57,7 @@ const menuByRole = {
   2: [
     { title: 'Tổng quan', url: '/manager', icon: LayoutDashboard },
     { title: 'Kế hoạch sản xuất', url: '/manager/planning', icon: ClipboardList },
+    { title: 'Phản hồi cửa hàng', url: '/manager/feedback', icon: MessageSquare },
   ],
   // Store Staff (Role 3)
   3: [

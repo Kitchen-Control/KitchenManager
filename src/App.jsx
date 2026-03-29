@@ -27,6 +27,7 @@ import Deliveries from "./pages/coordinator/Deliveries";
 import ManagerDashboard from "./pages/manager/ManagerDashboard";
 import ProductionPlanning from "./pages/manager/ProductionPlanning";
 import ManagerReports from "./pages/manager/ManagerReports";
+import ManagerFeedback from "./pages/manager/ManagerFeedback";
 
 // Kitchen pages
 import KitchenDashboard from "./pages/kitchen/Dashboard";
@@ -104,6 +105,7 @@ const App = () => (
                   <Route path="/manager" element={<ManagerDashboard />} />
                   <Route path="/manager/planning" element={<ProductionPlanning />} />
                   <Route path="/manager/reports" element={<ManagerReports />} />
+                  <Route path="/manager/feedback" element={<ManagerFeedback />} />
                 </Route>
 
                 {/* Kitchen routes */}
