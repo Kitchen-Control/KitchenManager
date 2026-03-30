@@ -57,7 +57,8 @@ export const ROLE_REDIRECT_PATH = {
 
 export const PRODUCTION_PLAN_STATUS = {
   DRAFT: { label: 'Nháp', color: 'muted' },
-  WAITING: { label: 'Chờ duyệt', color: 'warning' },
+  WAITING: { label: 'Chờ nguyên liệu', color: 'warning' },
+  DISPATCHED: { label: 'Nguyên liệu đã xuất', color: 'info' },
   PROCESSING: { label: 'Đang thực hiện', color: 'info' },
   COMPLETE_ONE_SECTION: { label: 'Hoàn thành 1 phần', color: 'primary' },
   DONE: { label: 'Hoàn thành', color: 'success' },

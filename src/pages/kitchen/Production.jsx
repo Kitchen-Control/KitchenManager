@@ -45,7 +45,9 @@ export default function Production() {
     }
   };
 
-  const activePlans = plans.filter(p => p.status === 'WAITING' || p.status === 'PROCESSING');
+  const activePlans = plans.filter(
+    p => p.status === 'WAITING' || p.status === 'DISPATCHED' || p.status === 'PROCESSING'
+  );
   const historyPlans = plans.filter(p => p.status === 'DONE' || p.status === 'COMPLETE_ONE_SECTION');
 
   useEffect(() => {
@@ -233,6 +235,7 @@ export default function Production() {
       case 'DONE': return 'bg-green-100 text-green-800 border-green-200';
       case 'COMPLETE_ONE_SECTION': return 'bg-teal-100 text-teal-800 border-teal-200';
       case 'PROCESSING': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'DISPATCHED': return 'bg-cyan-100 text-cyan-800 border-cyan-200';
       case 'WAITING': return 'bg-amber-100 text-amber-800 border-amber-200';
       case 'DRAFT': return 'bg-gray-100 text-gray-600 border-gray-200';
       case 'CANCEL': return 'bg-red-100 text-red-800 border-red-200';
@@ -293,7 +296,7 @@ export default function Production() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {plan.status === 'WAITING' && (
+                        {plan.status === 'DISPATCHED' && (
                           <Button 
                             onClick={() => handleAcceptPlan(plan.planId)}
                             disabled={isSubmitting}
@@ -302,6 +305,11 @@ export default function Production() {
                           >
                             Tiếp nhận kế hoạch
                           </Button>
+                        )}
+                        {plan.status === 'WAITING' && (
+                          <div className="flex items-center gap-2 text-amber-600 font-bold bg-amber-50 px-3 py-1 rounded-full border border-amber-200 text-xs">
+                            <AlertCircle className="h-3.5 w-3.5" /> Chờ Kho xuất nguyên liệu
+                          </div>
                         )}
                         <Badge className={`${getStatusColor(plan.status)} border shadow-sm px-3 py-1`}>
                           {PRODUCTION_PLAN_STATUS[plan.status]?.label || plan.status}
