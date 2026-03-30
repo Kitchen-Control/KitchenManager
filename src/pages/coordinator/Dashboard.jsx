@@ -35,7 +35,7 @@ export default function CoordinatorDashboard() {
         // Count READY receipts for DISPATCHED or PARTIAL_DELIVERED orders
         const allReceipts = Array.isArray(receiptsRes) ? receiptsRes : [];
         const groupableOrders = allOrders.filter(o => 
-          o.status === 'DISPATCHED' || o.status === 'PARTIAL_DELIVERED'
+          (o.status === 'DISPATCHED' || o.status === 'PARTIAL_DELIVERED') && !o.delivery_id
         );
         const groupableIds = new Set(groupableOrders.map(o => o.order_id));
         const readyReceipts = allReceipts.filter(r => groupableIds.has(r.order_id));

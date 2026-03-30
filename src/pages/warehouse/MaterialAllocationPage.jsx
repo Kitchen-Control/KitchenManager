@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { 
+import {
   getProductionPlans,
-  getMaterialRequirements, 
-  getInventories, 
-  getAllTransactions, // <--- Nhớ import hàm này vào nhé
-  createTransaction 
+  getMaterialRequirements,
+  getInventories,
+  getAllTransactions,
+  createTransaction,
+  updateProductionPlanStatus
 } from "../../data/api";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Badge } from "../../components/ui/badge";
-import { toast } from "sonner"; 
+import { toast } from "sonner";
 import { Loader2, ArrowLeft, AlertCircle, CheckCircle2, PackageCheck, Send } from "lucide-react";
 
 export default function MaterialAllocationPage() {
@@ -21,6 +22,7 @@ export default function MaterialAllocationPage() {
   const [inventories, setInventories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState(null);
+  const [dispatchingId, setDispatchingId] = useState(null);
   const [allocations, setAllocations] = useState({});
 
   useEffect(() => {
@@ -33,7 +35,6 @@ export default function MaterialAllocationPage() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      
       // 1. Lấy song song Plans, Inventories và Transactions
       const [allPlans, invData, allTxs] = await Promise.all([
         getProductionPlans(),
@@ -45,7 +46,6 @@ export default function MaterialAllocationPage() {
       ]);
 
       const waitingPlans = (allPlans || []).filter(p => p.status?.toUpperCase() === "WAITING");
-      
       // Lọc sẵn các giao dịch XUẤT KHO liên quan đến Kế hoạch để dễ tính toán
       const exportTxs = (allTxs || []).filter(tx => tx.type === "EXPORT" && tx.note?.startsWith("Production Plan"));
 
@@ -59,14 +59,13 @@ export default function MaterialAllocationPage() {
 
           const processedReqs = reqs.map(req => {
             // Lọc các lần xuất kho của đúng Kế hoạch này và đúng Mã nguyên liệu này
-            const relatedTxs = exportTxs.filter(tx => 
-              tx.productId === req.productId && 
+            const relatedTxs = exportTxs.filter(tx =>
+              tx.productId === req.productId &&
               tx.note === `Production Plan ${plan.planId}`
             );
 
             // Cộng dồn xem đã xuất được bao nhiêu rồi
             const exportedQty = relatedTxs.reduce((sum, tx) => sum + tx.quantity, 0);
-            
             // Số lượng cần xuất thêm = Định mức ban đầu - Đã xuất
             const remainingQty = Math.max(0, req.totalRequiredQuantity - exportedQty);
             const isCompleted = exportedQty >= req.totalRequiredQuantity;
@@ -78,13 +77,10 @@ export default function MaterialAllocationPage() {
         })
       );
 
-      // 3. ẨN NHỮNG KẾ HOẠCH ĐÃ HOÀN THÀNH 100%
+      // 3. Tách kế hoạch: chia làm 2 phần — chưa xuất đủ và đã xuất đủ (chờ dispatch)
       const activePlans = plansWithReqs.filter(plan => {
-        if (plan.materials.length === 0) return false; // Kế hoạch không có nguyên liệu thì ẩn luôn
-        
-        // Kiểm tra xem có phải TẤT CẢ nguyên liệu đều đã completed không?
-        const isPlanFullyCompleted = plan.materials.every(req => req.isCompleted);
-        return !isPlanFullyCompleted; // Nếu chưa hoàn thành 100% thì mới giữ lại hiển thị
+        if (plan.materials.length === 0) return false;
+        return true; // giữ lại tất cả, kể cả kế hoạch đã đủ ng.liệu (chuẩn bị dispatch)
       });
 
       setPlans(activePlans);
@@ -92,7 +88,6 @@ export default function MaterialAllocationPage() {
       const availableInvs = (invData || [])
         .filter(inv => getInvQuantity(inv) > 0)
         .sort((a, b) => new Date(getInvExpiryDate(a)) - new Date(getInvExpiryDate(b)));
-        
       setInventories(availableInvs);
 
     } catch (error) {
@@ -122,7 +117,6 @@ export default function MaterialAllocationPage() {
 
   const handleExportSingleMaterial = async (planId, req) => {
     const allocatedQty = getTotalAllocated(planId, req.productId);
-    
     // So sánh với số lượng CẦN THÊM (remainingQty) chứ không phải tổng yêu cầu nữa
     if (allocatedQty <= 0) {
       toast.warning(`Vui lòng nhập số lượng cho ${req.productName}`);
@@ -130,12 +124,11 @@ export default function MaterialAllocationPage() {
     }
     if (allocatedQty < req.remainingQty) {
       toast.error(`Chưa xuất đủ số lượng yêu cầu (Cần thêm ${req.remainingQty} ${req.unit})`);
-      return; 
+      return;
     }
 
     const transactionsToCreate = [];
     const prefix = `${planId}-${req.productId}-`;
-    
     Object.keys(allocations).forEach(key => {
       if (key.startsWith(prefix)) {
         const qty = parseFloat(allocations[key]);
@@ -162,7 +155,6 @@ export default function MaterialAllocationPage() {
       }
 
       toast.success(`Đã xuất kho ${req.productName} thành công!`, { id: processId });
-      
       setAllocations(prev => {
         const newAlloc = { ...prev };
         Object.keys(newAlloc).forEach(k => {
@@ -172,11 +164,25 @@ export default function MaterialAllocationPage() {
       });
 
       // Fetch lại Data. Nếu nguyên liệu này là cái cuối cùng của Plan, Plan sẽ tự động biến mất!
-      fetchInitialData(); 
+      fetchInitialData();
     } catch (error) {
       toast.error(`Lỗi xuất kho ${req.productName}: ` + error.message, { id: processId });
     } finally {
       setSubmittingId(null);
+    }
+  };
+
+  const handleDispatchPlan = async (planId) => {
+    if (!confirm(`Xác nhận gửi toàn bộ nguyên liệu của Kế hoạch #${planId} cho Bếp?\nKế hoạch sẽ chuyển sang trạng thái "Đã xuất nguyên liệu".`)) return;
+    setDispatchingId(planId);
+    try {
+      await updateProductionPlanStatus(planId, 'DISPATCHED');
+      toast.success(`Đã gửi nguyên liệu cho Bếp! Kế hoạch #${planId} chuyển sang DISPATCHED.`);
+      fetchInitialData();
+    } catch (error) {
+      toast.error('Lỗi khi dispatch kế hoạch: ' + error.message);
+    } finally {
+      setDispatchingId(null);
     }
   };
 
@@ -196,7 +202,7 @@ export default function MaterialAllocationPage() {
 
       {plans.length === 0 ? (
         <Card className="p-10 text-center text-gray-500">
-          <CheckCircle2 className="w-12 h-12 mx-auto text-green-500 mb-3 opacity-50"/>
+          <CheckCircle2 className="w-12 h-12 mx-auto text-green-500 mb-3 opacity-50" />
           Tất cả Kế hoạch WAITING đều đã được cấp phát đủ nguyên liệu!
         </Card>
       ) : (
@@ -205,7 +211,14 @@ export default function MaterialAllocationPage() {
             <CardHeader className="bg-blue-50/50">
               <div className="flex justify-between items-center">
                 <CardTitle className="text-xl">Kế hoạch #{plan.planId}</CardTitle>
-                <Badge variant="secondary" className="bg-blue-100 text-blue-800">Đang cấp phát</Badge>
+                {(() => {
+                  const allDone = plan.materials.every(m => m.isCompleted);
+                  return allDone ? (
+                    <Badge variant="secondary" className="bg-green-100 text-green-800">Đã xuất đủ — chờ gửi Bếp</Badge>
+                  ) : (
+                    <Badge variant="secondary" className="bg-blue-100 text-blue-800">Đang cấp phát</Badge>
+                  );
+                })()}
               </div>
             </CardHeader>
 
@@ -216,7 +229,7 @@ export default function MaterialAllocationPage() {
                   return (
                     <div key={req.productId} className="p-4 border border-green-300 bg-green-50/50 rounded-lg shadow-inner flex flex-col md:flex-row justify-between items-center gap-2">
                       <div className="font-bold text-green-800 flex items-center gap-2">
-                        <CheckCircle2 className="w-5 h-5"/> {req.productName}
+                        <CheckCircle2 className="w-5 h-5" /> {req.productName}
                       </div>
                       <div className="font-semibold text-green-700 text-sm">
                         Đã xuất đủ {req.totalRequiredQuantity} {req.unit} (Hoàn thành)
@@ -226,7 +239,7 @@ export default function MaterialAllocationPage() {
                 }
 
                 // UI 2: NẾU CHƯA XUẤT HOẶC MỚI XUẤT ĐƯỢC 1 PHẦN
-                const relevantInvs = inventories.filter(inv => 
+                const relevantInvs = inventories.filter(inv =>
                   (inv.product_name || "").toLowerCase() === (req.productName || "").toLowerCase()
                 );
 
@@ -238,7 +251,7 @@ export default function MaterialAllocationPage() {
                   <div key={req.productId} className="p-4 border rounded-lg bg-white shadow-inner">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-2">
                       <div className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                         {req.productName}
+                        {req.productName}
                       </div>
                       <div className="text-sm font-medium bg-blue-50 px-3 py-1.5 rounded text-blue-800 border border-blue-200 flex items-center gap-2">
                         <span>Cần xuất thêm: <strong className="text-base">{req.remainingQty} {req.unit}</strong></span>
@@ -253,7 +266,6 @@ export default function MaterialAllocationPage() {
                         relevantInvs.map((inv) => {
                           const actualQty = getInvQuantity(inv);
                           const expiryDate = getInvExpiryDate(inv);
-                          
                           return (
                             <div key={inv.batch?.batchId || inv.inventoryId} className="flex items-center justify-between text-sm bg-slate-50 p-2 rounded border border-slate-200">
                               <span>
@@ -274,7 +286,7 @@ export default function MaterialAllocationPage() {
                         })
                       ) : (
                         <div className="text-rose-500 text-sm flex items-center gap-1 bg-rose-50 p-2 rounded border border-rose-100">
-                          <AlertCircle className="w-4 h-4"/> Hết hàng trong kho (Cần nhập thêm)
+                          <AlertCircle className="w-4 h-4" /> Hết hàng trong kho (Cần nhập thêm)
                         </div>
                       )}
                     </div>
@@ -284,22 +296,43 @@ export default function MaterialAllocationPage() {
                         {isEnough && <PackageCheck className="w-4 h-4" />}
                         Đã chọn đợt này: {totalAllocated} / {req.remainingQty} {req.unit}
                       </div>
-                      
-                      <Button 
+
+                      <Button
                         onClick={() => handleExportSingleMaterial(plan.planId, req)}
                         disabled={isSubmittingThis || relevantInvs.length === 0}
                         className={isEnough ? "bg-green-600 hover:bg-green-700" : "bg-blue-600 hover:bg-blue-700"}
                       >
                         {isSubmittingThis ? (
-                           <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Đang xuất...</>
+                          <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Đang xuất...</>
                         ) : (
-                           <><Send className="w-4 h-4 mr-2" /> Xuất {req.productName}</>
+                          <><Send className="w-4 h-4 mr-2" /> Xuất {req.productName}</>
                         )}
                       </Button>
                     </div>
                   </div>
                 );
               })}
+
+              {/* Nút Dispatch: chỉ hiện khi TẤT CẢ nguyên liệu đã được xuất đủ */}
+              {plan.materials.every(m => m.isCompleted) && (
+                <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-xl flex items-center justify-between gap-4">
+                  <div>
+                    <p className="font-bold text-green-800 text-base"> Đã xuất đủ toàn bộ nguyên liệu</p>
+                    <p className="text-sm text-green-700 mt-0.5">Nhấn nút bên phải để thông báo cho Bếp tiếp nhận kế hoạch sản xuất.</p>
+                  </div>
+                  <Button
+                    onClick={() => handleDispatchPlan(plan.planId)}
+                    disabled={dispatchingId === plan.planId}
+                    className="bg-green-600 hover:bg-green-700 whitespace-nowrap shadow-md"
+                  >
+                    {dispatchingId === plan.planId ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Đang gửi...</>
+                    ) : (
+                      <><Send className="w-4 h-4 mr-2" /> Gửi nguyên liệu cho Bếp</>
+                    )}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         ))
