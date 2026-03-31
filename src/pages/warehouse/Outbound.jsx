@@ -32,7 +32,13 @@ export default function WarehouseOutbound() {
     isLoading: false,
     isSubmitting: false
   });
-
+// Modal từ chối đơn hàng
+  const [rejectModal, setRejectModal] = useState({
+    isOpen: false,
+    order: null,
+    reason: '',
+    isSubmitting: false
+  });
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -414,21 +420,37 @@ export default function WarehouseOutbound() {
     }));
   };
 
-  const handleRejectOrder = async (order) => {
-    const reason = prompt('Lý do từ chối đơn hàng?');
-    if (reason === null) return;
-    
+  const handleOpenRejectModal = (order) => {
+    setRejectModal({
+      isOpen: true,
+      order: order,
+      reason: '', // Reset lý do mỗi khi mở
+      isSubmitting: false
+    });
+  };
+
+  const handleConfirmReject = async () => {
+    const { order, reason } = rejectModal;
+    if (!order) return;
+
+    setRejectModal(prev => ({ ...prev, isSubmitting: true }));
     setProcessingOrderId(order.order_id);
+    
     try {
-      // Flow 1 Step 2: Case B - Reject order -> Update status to CANCELED with [REJECTED] tag
-      const finalComment = `[REJECTED] ${reason || 'Không rõ lý do'}`;
+      const finalComment = `[REJECTED] ${reason.trim() || 'Không rõ lý do'}`;
       await updateOrderStatus(order.order_id, 'CANCELED', finalComment);
       toast.success('Đã từ chối đơn hàng');
-      await fetchData();
+      
+      // Cập nhật giao diện ngay lập tức thay vì đợi fetchData
+      setAllOrders(prev => prev.map(o => o.order_id === order.order_id ? { ...o, status: 'CANCELED', comment: finalComment } : o));
+      
+      // Đóng modal
+      setRejectModal(prev => ({ ...prev, isOpen: false }));
     } catch (error) {
       toast.error('Lỗi: ' + error.message);
     } finally {
       setProcessingOrderId(null);
+      setRejectModal(prev => ({ ...prev, isSubmitting: false }));
     }
   };
 
@@ -605,7 +627,7 @@ export default function WarehouseOutbound() {
                             {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PackageCheck className="mr-2 h-4 w-4" />}
                             Duyệt đơn {order.comment?.includes('bổ sung') ? 'hàng bù' : ''}
                           </Button>
-                          <Button onClick={(e) => { e.stopPropagation(); handleRejectOrder(order); }} disabled={isProcessing} variant="outline" className="text-red-600 border-red-200">
+                          <Button onClick={(e) => { e.stopPropagation(); handleOpenRejectModal(order); }} disabled={isProcessing} variant="outline" className="text-red-600 border-red-200">                            
                             Từ chối
                           </Button>
                         </div>
@@ -813,7 +835,49 @@ export default function WarehouseOutbound() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+{/* Modal Từ chối đơn hàng */}
+      <Dialog open={rejectModal.isOpen} onOpenChange={(open) => setRejectModal(prev => ({ ...prev, isOpen: open }))}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-red-600 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Từ chối đơn hàng #{rejectModal.order?.order_id}
+            </DialogTitle>
+            <DialogDescription>
+              Vui lòng nhập lý do từ chối đơn hàng này để lưu vào hệ thống.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4 space-y-3">
+            <Label htmlFor="reject-reason" className="font-semibold text-slate-700">Lý do từ chối:</Label>
+            <Input
+              id="reject-reason"
+              placeholder="VD: Khách báo hủy, Sai thông tin kho..."
+              value={rejectModal.reason}
+              onChange={(e) => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
+              autoFocus
+            />
+          </div>
 
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button 
+              variant="outline" 
+              onClick={() => setRejectModal(prev => ({ ...prev, isOpen: false }))}
+              disabled={rejectModal.isSubmitting}
+            >
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmReject}
+              disabled={rejectModal.isSubmitting}
+            >
+              {rejectModal.isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Xác nhận từ chối
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

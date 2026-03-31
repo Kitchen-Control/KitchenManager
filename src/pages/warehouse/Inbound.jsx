@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getAllLogBatches, updateLogBatchStatus, getProductionPlans, updateProductionPlanStatus } from '../../data/api';
-import { BATCH_STATUS, ROLE_ID } from '../../data/constants';
+import { BATCH_STATUS } from '../../data/constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
-import { Loader2, Package, History, RefreshCw, Clock, ArrowLeft } from 'lucide-react';
+import { Loader2, Package, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function BatchLog({ status: propStatus }) {
@@ -70,10 +70,7 @@ export default function BatchLog({ status: propStatus }) {
       return;
     }
 
-    const actionText = 
-  newStatus === 'DONE' ? 'Nhập kho' :
-  newStatus === 'WAITING_TO_CANCEL' ? 'Hủy/Báo hỏng' :
-  newStatus;
+    const actionText = newStatus === 'DONE' ? 'Nhập kho' : newStatus;
 
     if (!confirm(`Xác nhận ${actionText} cho ${selectedBatches.length} lô đã chọn?`)) return;
 
@@ -99,6 +96,94 @@ export default function BatchLog({ status: propStatus }) {
       toast.error('Lỗi cập nhật hàng loạt: ' + error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const checkAndUpdatePlanStatus = async (planId) => {
+    if (!planId) return;
+    try {
+      const [allPlans, allBatches] = await Promise.all([
+        getProductionPlans(),
+        getAllLogBatches()
+      ]);
+
+      let plan = allPlans.find(p => p.planId === planId);
+      if (!plan || plan.status === 'DONE') return;
+
+      const calcStatus = getCalculatedPlanStatus(plan, allBatches);
+
+      if (calcStatus === 'DONE' || calcStatus === 'COMPLETE_ONE_SECTION') {
+        try {
+          await updateProductionPlanStatus(planId, calcStatus);
+          toast.info(`Kế hoạch #${planId} đã hoàn tất và chuyển sang trạng thái ${calcStatus}!`);
+        } catch (updateErr) {
+          console.error('API update status failed:', updateErr);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking plan status:', error);
+    }
+  };
+
+  const getCalculatedPlanStatus = (plan, planBatches) => {
+    const apiStatus = String(plan.status || '').toUpperCase();
+    if (apiStatus === 'DONE') return 'DONE';
+
+    const pDetails = plan.details || plan.productionPlanDetails || [];
+    if (pDetails.length === 0) return plan.status || 'PROCESSING';
+
+    const terminalStatuses = ['DONE', 'DAMAGED', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
+    const currentPlanId = Number(plan.planId || plan.plan_id);
+    const planBatchesForThisPlan = planBatches.filter(b => Number(b.planId || b.plan_id) === currentPlanId);
+
+    if (planBatchesForThisPlan.length === 0) return plan.status || 'PROCESSING';
+
+    const allBatchesFinished = planBatchesForThisPlan.every(b => {
+      const s = String(b.status || '').toUpperCase();
+      const isTerminal = terminalStatuses.includes(s);
+      return isTerminal;
+    });
+
+    const allProductsStarted = pDetails.every(detail => {
+      const dpid = Number(detail.productId || detail.product_id);
+      const isStarted = planBatchesForThisPlan.some(b => Number(b.productId || b.product_id) === dpid);
+      return isStarted;
+    });
+
+    if (allBatchesFinished && allProductsStarted) {
+      // Check for mixed results
+      const hasIssues = planBatchesForThisPlan.some(b => 
+        ['DAMAGED', 'CANCELLED', 'WAITING_TO_CANCEL'].includes(String(b.status || '').toUpperCase())
+      );
+      return hasIssues ? 'COMPLETE_ONE_SECTION' : 'DONE';
+    }
+    return plan.status || 'PROCESSING';
+  };
+
+  const handleUpdateStatus = async (batchId, newStatus) => {
+    const statusLabels = {
+      'DONE': 'Nhập kho',
+      'WAITING_TO_CONFIRM': 'Hoàn thành sản xuất'
+    };
+
+    if (!confirm(`Xác nhận ${statusLabels[newStatus]} cho lô #${batchId}?`)) return;
+
+    try {
+      await updateLogBatchStatus(batchId, newStatus);
+      toast.success('Cập nhật trạng thái thành công!');
+
+      // Check if plan should be DONE
+      const terminalStatuses = ['DONE', 'DAMAGED', 'CANCEL', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
+      if (terminalStatuses.includes(newStatus)) {
+        const batch = batches.find(b => b.batch_id === batchId);
+        if (batch && (batch.planId || batch.plan_id)) {
+          await checkAndUpdatePlanStatus(batch.planId || batch.plan_id);
+        }
+      }
+
+      fetchBatches();
+    } catch (error) {
+      toast.error('Lỗi cập nhật: ' + error.message);
     }
   };
 
@@ -129,14 +214,13 @@ export default function BatchLog({ status: propStatus }) {
             <span className="font-bold text-sm">Đã chọn {selectedBatches.length} lô</span>
             <div className="flex gap-2">
               <Button 
-  size="sm" 
-  variant="secondary" 
-  className="h-8 text-xs font-bold" 
-  onClick={() => handleBulkUpdate('DONE')}
->
-  Nhập kho
-</Button>
-              <Button size="sm" variant="destructive" className="h-8 text-xs font-bold" onClick={() => handleBulkUpdate('WAITING_TO_CANCEL')}>Hủy / Báo hỏng</Button>
+                size="sm" 
+                variant="secondary" 
+                className="h-8 text-xs font-bold" 
+                onClick={() => handleBulkUpdate('DONE')}
+              >
+                Nhập kho
+              </Button>
               <Button size="sm" variant="outline" className="h-8 text-xs font-bold text-black border-white hover:bg-orange-700" onClick={() => setSelectedBatches([])}>Bỏ chọn</Button>
             </div>
           </div>
@@ -189,22 +273,14 @@ export default function BatchLog({ status: propStatus }) {
                          >Hoàn thành</Button>
                        )}
                        {batch.status === 'WAITING_TO_CONFIRM' && (
-  <Button 
-    size="sm" 
-    variant="ghost" 
-    onClick={() => handleUpdateStatus(batch.batch_id, 'DONE')}
-    className="h-8 text-xs text-green-600 hover:text-green-700 hover:bg-green-50 font-bold"
-  >
-    Nhập kho
-  </Button>
-)}
-                       {['PROCESSING', 'WAITING_TO_CONFIRM'].includes(batch.status) && (
                          <Button 
                            size="sm" 
                            variant="ghost" 
-                           onClick={() => handleUpdateStatus(batch.batch_id, 'WAITING_TO_CANCEL')}
-                           className="h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 font-bold"
-                         >Hủy / Báo hỏng</Button>
+                           onClick={() => handleUpdateStatus(batch.batch_id, 'DONE')}
+                           className="h-8 text-xs text-green-600 hover:text-green-700 hover:bg-green-50 font-bold"
+                         >
+                           Nhập kho
+                         </Button>
                        )}
                     </div>
                   </div>
@@ -215,99 +291,6 @@ export default function BatchLog({ status: propStatus }) {
         ))}
       </div>
     );
-  };
-
-  const getCalculatedPlanStatus = (plan, planBatches) => {
-    const apiStatus = String(plan.status || '').toUpperCase();
-    if (apiStatus === 'DONE') return 'DONE';
-
-    const pDetails = plan.details || plan.productionPlanDetails || [];
-    if (pDetails.length === 0) return plan.status || 'PROCESSING';
-
-    const terminalStatuses = ['DONE', 'DAMAGED', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
-    const currentPlanId = Number(plan.planId || plan.plan_id);
-    const planBatchesForThisPlan = planBatches.filter(b => Number(b.planId || b.plan_id) === currentPlanId);
-
-    if (planBatchesForThisPlan.length === 0) return plan.status || 'PROCESSING';
-
-    const allBatchesFinished = planBatchesForThisPlan.every(b => {
-      const s = String(b.status || '').toUpperCase();
-      const isTerminal = terminalStatuses.includes(s);
-      // console.log(`Batch #${b.batch_id} status ${s} is terminal? ${isTerminal}`);
-      return isTerminal;
-    });
-
-    const allProductsStarted = pDetails.every(detail => {
-      const dpid = Number(detail.productId || detail.product_id);
-      const isStarted = planBatchesForThisPlan.some(b => Number(b.productId || b.product_id) === dpid);
-      // console.log(`Product ${detail.productName} (#${dpid}) is started? ${isStarted}`);
-      return isStarted;
-    });
-
-    if (allBatchesFinished && allProductsStarted) {
-      // Check for mixed results
-      const hasIssues = planBatchesForThisPlan.some(b => 
-        ['DAMAGED', 'CANCELLED', 'WAITING_TO_CANCEL'].includes(String(b.status || '').toUpperCase())
-      );
-      return hasIssues ? 'COMPLETE_ONE_SECTION' : 'DONE';
-    }
-    return plan.status || 'PROCESSING';
-  };
-
-  const checkAndUpdatePlanStatus = async (planId) => {
-    if (!planId) return;
-    try {
-      const [allPlans, allBatches] = await Promise.all([
-        getProductionPlans(),
-        getAllLogBatches()
-      ]);
-
-      let plan = allPlans.find(p => p.planId === planId);
-      if (!plan || plan.status === 'DONE') return;
-
-      const calcStatus = getCalculatedPlanStatus(plan, allBatches);
-
-      if (calcStatus === 'DONE' || calcStatus === 'COMPLETE_ONE_SECTION') {
-        try {
-          await updateProductionPlanStatus(planId, calcStatus);
-          toast.info(`Kế hoạch #${planId} đã hoàn tất và chuyển sang trạng thái ${calcStatus}!`);
-        } catch (updateErr) {
-          console.error('API update status failed:', updateErr);
-        }
-      }
-    } catch (error) {
-      console.error('Error checking plan status:', error);
-    }
-  };
-
-  const handleUpdateStatus = async (batchId, newStatus) => {
-    const statusLabels = {
-      'WAITING_TO_CANCEL': 'Yêu cầu Hủy',
-      'CANCEL': 'Hủy / Hỏng',
-      'DAMAGED': 'Báo Hỏng',
-      'DONE': 'Nhập kho',
-      'WAITING_TO_CONFIRM': 'Hoàn thành sản xuất'
-    };
-
-    if (!confirm(`Xác nhận ${statusLabels[newStatus]} cho lô #${batchId}?`)) return;
-
-    try {
-      await updateLogBatchStatus(batchId, newStatus);
-      toast.success('Cập nhật trạng thái thành công!');
-
-      // Check if plan should be DONE
-      const terminalStatuses = ['DONE', 'DAMAGED', 'CANCEL', 'CANCELLED', 'EXPIRED', 'WAITING_TO_CONFIRM', 'WAITING_TO_CANCEL'];
-      if (terminalStatuses.includes(newStatus)) {
-        const batch = batches.find(b => b.batch_id === batchId);
-        if (batch && (batch.planId || batch.plan_id)) {
-          await checkAndUpdatePlanStatus(batch.planId || batch.plan_id);
-        }
-      }
-
-      fetchBatches();
-    } catch (error) {
-      toast.error('Lỗi cập nhật: ' + error.message);
-    }
   };
 
   const statusConfig = BATCH_STATUS[effectiveStatus] || { label: effectiveStatus };
