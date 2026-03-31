@@ -38,7 +38,11 @@ export default function Waste() {
 
   const handleDisposeSingle = async (item) => {
     if (!confirm(`Xác nhận tiêu hủy ${item.quantity} ${item.product_name} (Lô #${item.batch_id})?`)) return;
-    await disposeItem(item);
+    const ok = await disposeItem(item);
+    if (ok) {
+      toast.success(`Đã tiêu hủy lô #${item.batch_id} thành công! Trạng thái chuyển sang DAMAGED.`);
+      fetchExpiredGoods();
+    }
   };
 
   const disposeItem = async (item) => {
