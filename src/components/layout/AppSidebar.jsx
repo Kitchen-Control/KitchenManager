@@ -79,6 +79,7 @@ const menuByRole = {
   // Shipper (Role 6)
   6: [
     { title: 'Chuyến hàng của tôi', url: '/shipper', icon: Truck },
+    { title: 'Bản đồ giao hàng', url: '/shipper/map', icon: MapPin },
     { title: 'Lịch sử giao hàng', url: '/shipper/history', icon: History },
   ],
   // Warehouse (Role 7)
@@ -103,6 +104,7 @@ const kitchenExecutionMenu = [
 const kitchenBatchManagementMenu = [
   { title: 'Đã xác nhận', url: '/kitchen/batches/DONE', icon: CheckCircle2 },
   { title: 'Đã hỏng', url: '/kitchen/batches/DAMAGED', icon: AlertCircle },
+  { title: 'Đã hết hạn', url: '/kitchen/batches/EXPIRED', icon: AlertTriangle },
 ];
 
 const roleNames = {
