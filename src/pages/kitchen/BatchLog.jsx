@@ -187,14 +187,7 @@ export default function BatchLog({ status: propStatus }) {
                            className="h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 font-bold"
                          >Hủy</Button>
                        )}
-                       {['WAITING_TO_CANCEL'].includes(batch.status) && (
-                         <Button 
-                           size="sm" 
-                           variant="ghost" 
-                           onClick={() => handleUpdateStatus(batch.batch_id, 'DAMAGED')}
-                           className="h-8 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 font-bold"
-                         >Hủy</Button>
-                       )}
+                       
                     </div>
                   </div>
                 ))}
