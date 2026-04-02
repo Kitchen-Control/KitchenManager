@@ -51,7 +51,6 @@ const menuByRole = {
     { title: 'Quản lý sản phẩm', url: '/admin/products', icon: Package },
     { title: 'Quản lý người dùng', url: '/admin/users', icon: Users },
     { title: 'Báo cáo', url: '/admin/reports', icon: BarChart3 },
-    { title: 'Cài đặt', url: '/admin/settings', icon: Settings },
   ],
   // Manager (Role 2)
   2: [

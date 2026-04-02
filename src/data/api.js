@@ -1029,6 +1029,16 @@ export const getRecipes = async () => {
   return await handleResponse(response);
 };
 
+export const createRecipe = async (recipeData) => {
+  const response = await authFetch(`${API_BASE_URL}/recipes`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json' 
+    },
+    body: JSON.stringify(recipeData),
+  });
+  return await handleResponse(response);
+};
 /** GET /recipes/search/{keyword} */
 export const searchRecipes = async (keyword) => {
   const response = await authFetch(`${API_BASE_URL}/recipes/search/${encodeURIComponent(keyword)}`);
