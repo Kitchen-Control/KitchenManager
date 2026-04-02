@@ -6,6 +6,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Loader2, Package, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -14,7 +16,9 @@ export default function BatchLog({ status: propStatus }) {
   const { status: urlStatus } = useParams();
   const effectiveStatus = propStatus || urlStatus;
   const [batches, setBatches] = useState([]);
+  const [plans, setPlans] = useState([]);
   const [selectedBatches, setSelectedBatches] = useState([]);
+  const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchBatches = async () => {
@@ -27,6 +31,7 @@ export default function BatchLog({ status: propStatus }) {
       // Only production type batches for kitchen
       const kitchenBatches = (batchData || []).filter(b => b.type === 'PRODUCTION');
       setBatches(kitchenBatches.sort((a, b) => b.batch_id - a.batch_id));
+      setPlans(planData || []);
       setLoading(false);
     } catch (error) {
       toast.error('Lỗi tải danh sách lô: ' + error.message);
@@ -241,7 +246,14 @@ export default function BatchLog({ status: propStatus }) {
                   <span className="text-xs font-normal text-muted-foreground">({planBatches.length} lô)</span>
                 </CardTitle>
               </div>
-              <Link to={`/kitchen/production`} className="text-[10px] text-orange-600 font-bold hover:underline py-1 px-2 bg-white rounded border">XEM KẾ HOẠCH</Link>
+              {planId !== 'NO_PLAN' && (
+                <button 
+                  onClick={() => setSelectedPlanId(Number(planId))} 
+                  className="text-[10px] text-orange-600 font-bold hover:underline py-1 px-2 bg-white rounded border border-orange-200 uppercase tracking-wide hover:bg-orange-50 transition-colors"
+                >
+                  XEM KẾ HOẠCH
+                </button>
+              )}
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y">
@@ -316,6 +328,50 @@ export default function BatchLog({ status: propStatus }) {
       ) : (
         renderBatchItems([effectiveStatus])
       )}
+
+      {/* Plan Details Dialog */}
+      <Dialog open={!!selectedPlanId} onOpenChange={(open) => !open && setSelectedPlanId(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl text-orange-600">Chi tiết Kế hoạch #{selectedPlanId}</DialogTitle>
+            <DialogDescription>Danh sách yêu cầu sản phẩm của kế hoạch sản xuất</DialogDescription>
+          </DialogHeader>
+          
+          {(() => {
+            const plan = plans.find(p => p.planId === selectedPlanId || p.plan_id === selectedPlanId);
+            const pDetails = plan?.details || plan?.productionPlanDetails || [];
+
+            if (!plan) return <div className="p-8 text-center text-muted-foreground"><Loader2 className="animate-spin h-6 w-6 mx-auto mb-2" /> Đang tải dữ liệu...</div>;
+            if (pDetails.length === 0) return <div className="p-8 text-center border border-dashed rounded-lg bg-gray-50 text-muted-foreground">Kế hoạch này không có chi tiết cụ thể.</div>;
+
+            return (
+              <div className="border rounded-lg overflow-hidden shadow-sm">
+                <Table>
+                  <TableHeader className="bg-orange-50">
+                    <TableRow>
+                      <TableHead className="w-20">Mã</TableHead>
+                      <TableHead>Tên Sản Phẩm Cần Nấu</TableHead>
+                      <TableHead className="text-right">Số lượng Yêu cầu</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pDetails.map((item, idx) => (
+                      <TableRow key={idx} className="hover:bg-orange-50/30">
+                        <TableCell className="font-medium">#{item.productId || item.product_id}</TableCell>
+                        <TableCell className="font-bold">{item.productName || item.product_name || `Sản phẩm ID: ${item.productId || item.product_id}`}</TableCell>
+                        <TableCell className="text-right text-orange-600 font-bold">{item.quantity || item.required_quantity || item.totalRequiredQuantity || 0} {item.unit || 'phần'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            );
+          })()}
+          <div className="flex justify-end mt-4">
+            <Button className="bg-orange-600 hover:bg-orange-700 text-white" onClick={() => setSelectedPlanId(null)}>Đóng cửa sổ</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
