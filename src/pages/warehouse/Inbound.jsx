@@ -241,7 +241,6 @@ export default function BatchLog({ status: propStatus }) {
                   <span className="text-xs font-normal text-muted-foreground">({planBatches.length} lô)</span>
                 </CardTitle>
               </div>
-              <Link to={`/kitchen/production`} className="text-[10px] text-orange-600 font-bold hover:underline py-1 px-2 bg-white rounded border">XEM KẾ HOẠCH</Link>
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y">
