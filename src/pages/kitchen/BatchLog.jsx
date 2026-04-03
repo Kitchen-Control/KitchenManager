@@ -122,7 +122,7 @@ export default function BatchLog({ status: propStatus }) {
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" className="h-8 text-xs font-bold" onClick={() => handleBulkUpdate('WAITING_TO_CONFIRM')}>Hoàn thành</Button>
               <Button size="sm" variant="destructive" className="h-8 text-xs font-bold" onClick={() => handleBulkUpdate('WAITING_TO_CANCEL')}>Hủy / Báo hỏng</Button>
-              <Button size="sm" variant="outline" className="h-8 text-xs font-bold text-white border-white hover:bg-orange-700" onClick={() => setSelectedBatches([])}>Bỏ chọn</Button>
+              <Button size="sm" variant="outline" className="h-8 text-xs font-bold text-black border-white hover:bg-orange-700" onClick={() => setSelectedBatches([])}>Bỏ chọn</Button>
             </div>
           </div>
         )}
